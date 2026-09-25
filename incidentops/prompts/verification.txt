@@ -1,0 +1,2 @@
+TODO Student 4: independently check health and functional smoke tests after
+recovery. Report observed results; do not equate action success with resolution.

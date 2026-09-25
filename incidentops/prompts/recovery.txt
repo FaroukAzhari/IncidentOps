@@ -1,0 +1,3 @@
+TODO Student 3: execute only allowlisted recovery actions. Account for each real
+attempt and record its outcome. Never use unrestricted shell execution or claim
+independent verification.
