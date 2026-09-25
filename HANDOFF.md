@@ -1,66 +1,107 @@
-# Student 1 handoff to Student 2
+# Student 2 handoff to Student 3
 
-## Implemented
+## Completed scope
 
-- Python 3.12 skeleton, pinned dependencies, centralized `.env` configuration.
-- Shared Pydantic state, partial updates, append-only error/history reducers.
-- Five stable monitoring interfaces with typed results and deterministic mock data.
-- Specialized Monitoring Agent with independent failure handling.
-- Runnable graph with MemorySaver, thread IDs, honest placeholder nodes, CLI snapshots.
-- Offline tests for contracts, failure handling, graph execution and checkpoints.
+Student 2 owns the local test environment and fault injection. Student 3 owns
+Diagnostic and Recovery Agents. Student 1's Monitoring Agent, shared state,
+graph, and checkpoint contracts are preserved.
 
-## Preserve unless discussed with the team
+- Main API on port 8001: GET /health, GET /profile, GET /logs, GET /metrics.
+- Auth service on port 8002: GET /health and POST /validate.
+- SQLite users table: id, username, role; seeded demo/student user.
+- Shared, persistent database_down/auth_down/api_degraded/wrong_db_config flags.
+- Four injection functions, reset_all_faults, and a command-line controller.
+- Local HTTP/SQLite monitoring with --local; mock mode remains the default.
+- Bounded calls, sanitized collection errors, recent logs and measured metrics.
+- 54 automated tests, including Student 1 tests and all four fault scenarios.
 
-State field meanings, graph node names, node partial-update contracts, tool
-interfaces, and responsibility boundaries. Return only new errors/history entries.
-Health/logs/metrics replace the previous snapshot. Unknown health is omitted,
-not reported as false. Never let Monitoring populate diagnosis or resolution.
+## Setup
 
-## Student 2 implementation
-
-1. Implement main FastAPI service on port 8001 and auth service on port 8002.
-2. Add SQLite, reproducible fault state/controller, real logs and metrics.
-3. Implement the MonitoringTools adapter with bounded HTTP/database calls and
-   `observation_source="local_services"`; inject it into the graph. Keep mock tools
-   available for offline tests. Centralize additional settings in config.py.
-4. Replace `diagnose` with evidence-based Anthropic structured output using the
-   Diagnosis schema. Validate and map outputs as documented in README.
-5. Coordinate conditional evidence requests with Student 3. Bound evidence loops
-   separately from recovery retries. Do not add an unbounded monitor/diagnose loop.
-
-Student 3 owns recovery actions/attempts and evidence routing. Student 4 owns
-verification, final retry routing, UI and evaluation. The current finalizer always
-returns `monitoring_only`; it must be updated with real terminal semantics when
-those behaviors are implemented. Successful recovery tools alone must not resolve
-an incident.
-
-## Run and validate
-
-Use README setup commands, then:
+Use Python 3.12 because the existing Monitoring Agent uses Python 3.12 syntax.
+From a fresh checkout in PowerShell:
 
 ```powershell
-.\.venv\Scripts\python.exe -m incidentops.main
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m pip check
+git pull --ff-only origin main
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+python -m environment.database
+python -m pytest -q
+python -m pip check
 ```
 
-No key or service is needed for the current tests/CLI. No real recovery has been
-performed. Mock evidence is fixed regardless of the incident report.
+No Anthropic key is needed for Student 2. Student 3 adds a key locally for diagnosis.
+Never commit .env, virtual environments, or database files.
 
-## Sequential main workflow
-
-Only one student works/pushes at a time. Once the GitHub remote is configured,
-each student starts with `git pull origin main`. Before handing off, run the CLI,
-tests and dependency checks, update requirements/documentation as needed, commit,
-push and tell the next student what changed.
-
-Initial publication commands (replace the URL with the team's repository):
+Run each service in its own activated terminal:
 
 ```powershell
-git remote add origin https://github.com/OWNER/REPOSITORY.git
-git add .
-git commit -m "Initialize IncidentOps architecture and monitoring agent"
-git push -u origin main
+python -m uvicorn environment.auth_service.main:app --host 127.0.0.1 --port 8002
+python -m uvicorn environment.app_service.main:app --host 127.0.0.1 --port 8001
 ```
 
-No remote destination was supplied during implementation; publication is pending.
+In a third activated terminal:
+
+```powershell
+python -m environment.fault_controller reset
+Invoke-RestMethod -Uri http://localhost:8001/profile -Headers @{ Authorization = 'Bearer demo-token' }
+python -m incidentops.main --local
+python -m environment.fault_controller inject auth_down
+python -m incidentops.main --local
+python -m environment.fault_controller reset
+```
+
+Restart services after editing code. If pytest's shared temporary directory has
+Windows permission errors, pass --basetemp with a fresh directory beneath the
+ignored .pytest_cache directory.
+
+## Fault and evidence semantics
+
+| Fault | API health | Auth health | DB health | Profile |
+| --- | --- | --- | --- | --- |
+| None | true | true | true | 200 |
+| auth_down | true | false | true | 503 |
+| database_down | true | true | false | 500 |
+| api_degraded | false | true | true | 503 |
+| wrong_db_config | true | true | true | 500 |
+
+Faults are application-layer simulations. No process is killed or database damaged.
+Wrong configuration is simulated at the application boundary, so the independent
+SQLite probe remains healthy. Fault state persists separately in data/faults.db.
+
+Exercise /profile to generate dependency-specific logs before monitoring.
+Monitoring does not itself call /profile. /logs retains the last 100 application
+entries; /metrics measures health/profile requests. Both reset on service restart.
+Old logged failures are not proof that a fault is still active. The fixed demo
+token is a test credential, not production authentication.
+
+Connection failures or invalid responses mean unknown: the health key is omitted
+and an error is recorded. A valid unhealthy 503 response produces healthy=false.
+Fault-storage failures are collection errors, not confirmed outages.
+
+## Student 3 work
+
+Implement Diagnostic and Recovery Agents, real structured output using
+ChatAnthropic.with_structured_output(Diagnosis), allowlisted recovery actions,
+attempt accounting, and bounded evidence routing. State mappings are in README.
+
+Fault injection functions are in environment.fault_controller. Recovery may use
+environment.fault_state.set_fault(name, False) to clear a specific flag. Avoid
+resetting unrelated faults as a substitute for targeted recovery.
+
+Preserve tool interfaces, node names, state meanings, and partial updates. Return
+only new errors/history entries. Health/logs/metrics replace the latest snapshot.
+Never let Monitoring diagnose or resolve incidents. Bound evidence loops separately
+from recovery attempts. Keep mock tools and offline tests.
+
+Student 4 owns verification, final retry routing, UI, and evaluation. The current
+finalizer returns monitoring_only and incident_resolved=False. Change terminal
+semantics when the real workflow is implemented; recovery success alone does not
+prove resolution. There is no IncidentOps UI on port 8000 yet.
+
+## Sequential Git workflow
+
+One student works and pushes at a time. Run tests, dependency checks, and the CLI
+before handing off. Pull main before the next student starts.
+Repository: https://github.com/FaroukAzhari/IncidentOps.git.

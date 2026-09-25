@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class Diagnosis(BaseModel):
-    """Student 2 will use this with ChatAnthropic.with_structured_output."""
+    """Student 3 will use this with ChatAnthropic.with_structured_output."""
 
     suspected_component: str
     probable_cause: str

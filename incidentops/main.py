@@ -9,10 +9,12 @@ from pydantic import ValidationError
 from incidentops.config import load_settings
 from incidentops.graph import build_graph
 from incidentops.state import IncidentState
+from incidentops.tools.local_monitoring_tools import LocalMonitoringTools
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="IncidentOps Student 1: simulated monitoring")
+    parser = argparse.ArgumentParser(description="IncidentOps monitoring: offline demo or local services")
+    parser.add_argument("--local", action="store_true", help="Collect evidence from local services and SQLite")
     parser.add_argument("report", nargs="?", default="Users cannot log into the application.")
     parser.add_argument("--thread-id", help="Checkpoint thread identifier (defaults to incident UUID)")
     args = parser.parse_args()
@@ -25,8 +27,9 @@ def main() -> None:
     except ValidationError as exc:
         parser.error(str(exc))
     config = {"configurable": {"thread_id": args.thread_id or state.incident_id}}
-    graph = build_graph()
-    print("SIMULATED observations; diagnosis/recovery/verification are placeholders.")
+    graph = build_graph(tools=LocalMonitoringTools(settings) if args.local else None)
+    print(("LOCAL SERVICE observations" if args.local else "SIMULATED observations")
+          + "; diagnosis/recovery/verification are placeholders.")
     print(f"Thread: {config['configurable']['thread_id']}")
     print("Initial state:", state.model_dump_json(indent=2))
     for update in graph.stream(state.model_dump(), config=config, stream_mode="updates"):
