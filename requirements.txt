@@ -2,6 +2,7 @@
 langgraph==1.2.12
 langchain==1.4.2
 langchain-anthropic==1.7.4
+langchain-google-genai
 fastapi==0.141.1
 uvicorn==0.54.0
 pydantic==2.13.5

@@ -15,6 +15,8 @@ class IncidentState(BaseModel):
     monitoring_complete: bool = False
     observation_source: str | None = None
     requested_evidence: list[str] = Field(default_factory=list)
+    evidence_attempts: int = Field(default=0, ge=0)
+    max_evidence_attempts: int = Field(default=2, ge=0)
     suspected_root_cause: str | None = None
     diagnosis_confidence: float | None = Field(default=None, ge=0, le=1)
     diagnosis_evidence: list[str] = Field(default_factory=list)

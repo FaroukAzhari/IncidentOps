@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any
 
-from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from incidentops.config import load_settings
 from incidentops.schemas.diagnosis import Diagnosis
@@ -12,10 +12,12 @@ PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "diagnostic.txt"
 
 
 def _load_prompt() -> str:
+    """Load the Diagnostic Agent system instructions."""
     return PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 def _build_evidence(state: IncidentState) -> str:
+    """Convert the monitoring snapshot into evidence for the diagnostic model."""
     return f"""
 Incident ID: {state.incident_id}
 
@@ -37,24 +39,27 @@ Monitoring errors:
 
 
 def diagnose(state: IncidentState) -> dict[str, Any]:
+    """Diagnose the incident from monitoring evidence using structured LLM output."""
     settings = load_settings()
 
-    if not settings.anthropic_api_key.get_secret_value():
+    # Do not attempt an LLM call when the Gemini API key is unavailable.
+    if not settings.gemini_api_key.get_secret_value():
         return {
             "errors": [
-                "Diagnostic Agent: ANTHROPIC_API_KEY is not configured."
+                "Diagnostic Agent: GEMINI_API_KEY is not configured."
             ],
             "execution_history": [
-                "Diagnostic Agent could not run because the Anthropic API key is missing."
+                "Diagnostic Agent could not run because the Gemini API key is missing."
             ],
         }
 
-    llm = ChatAnthropic(
+    # Use the configured Gemini model for deterministic structured diagnosis.
+    llm = ChatGoogleGenerativeAI(
         model=settings.llm_model,
-        api_key=settings.anthropic_api_key,
-        temperature=0,
+        google_api_key=settings.gemini_api_key.get_secret_value(),
     )
 
+    # Force the model response to follow the existing Diagnosis Pydantic schema.
     structured_llm = llm.with_structured_output(Diagnosis)
 
     prompt = _load_prompt()
@@ -82,6 +87,7 @@ Return the structured diagnosis now.
             ],
         }
 
+    # Return only the IncidentState fields updated by the Diagnostic Agent.
     return {
         "suspected_root_cause": (
             f"{diagnosis.suspected_component}: {diagnosis.probable_cause}"
@@ -89,6 +95,7 @@ Return the structured diagnosis now.
         "diagnosis_confidence": diagnosis.confidence,
         "diagnosis_evidence": diagnosis.evidence,
         "needs_more_evidence": diagnosis.needs_more_evidence,
+        "requested_evidence": diagnosis.requested_evidence,
         "recommended_action": diagnosis.recommended_action,
         "execution_history": [
             (
@@ -98,3 +105,5 @@ Return the structured diagnosis now.
             )
         ],
     }
+
+    
