@@ -9,11 +9,30 @@ from incidentops.tools.recovery_tools import RECOVERY_ACTIONS, execute_recovery_
 def recover(state: IncidentState) -> dict[str, Any]:
     """Execute a diagnosed recovery action when it is safe and allowed."""
 
+    # Do not present a previous attempt's result as the current outcome.
+    cleared = {"recovery_action": None, "recovery_result": None}
+    if state.observation_source != "local_services":
+        return {
+            **cleared,
+            "execution_history": ["Recovery Agent skipped non-local observations; no action executed."],
+        }
+
+    if (state.needs_more_evidence is not False
+            or not state.suspected_root_cause
+            or state.diagnosis_confidence is None):
+        return {
+            **cleared,
+            "execution_history": [
+                "Recovery Agent skipped recovery: a current diagnosis with sufficient evidence is required."
+            ],
+        }
+
     recommended_action = state.recommended_action
 
     # The Diagnostic Agent may explicitly decide that recovery is not justified.
     if recommended_action == "none":
         return {
+            **cleared,
             "execution_history": [
                 "Recovery Agent skipped recovery because diagnosis did not justify an action."
             ],
@@ -22,6 +41,7 @@ def recover(state: IncidentState) -> dict[str, Any]:
     # Recovery requires a recommendation from the Diagnostic Agent.
     if not recommended_action:
         return {
+            **cleared,
             "execution_history": [
                 "Recovery Agent skipped recovery because no action was recommended."
             ],
@@ -30,6 +50,7 @@ def recover(state: IncidentState) -> dict[str, Any]:
     # Never execute arbitrary LLM-generated actions.
     if recommended_action not in RECOVERY_ACTIONS:
         return {
+            **cleared,
             "recovery_result": (
                 f"failed: recovery action '{recommended_action}' is not allowlisted"
             ),
@@ -41,6 +62,7 @@ def recover(state: IncidentState) -> dict[str, Any]:
     # Respect the configured recovery-attempt budget.
     if state.recovery_attempts >= state.max_recovery_attempts:
         return {
+            **cleared,
             "recovery_result": "failed: maximum recovery attempts reached",
             "execution_history": [
                 "Recovery Agent skipped recovery because the attempt limit was reached."

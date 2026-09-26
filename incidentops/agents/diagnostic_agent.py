@@ -21,6 +21,9 @@ def _build_evidence(state: IncidentState) -> str:
     return f"""
 Incident ID: {state.incident_id}
 
+User report:
+{state.user_report}
+
 Current service health:
 {state.service_status}
 
@@ -39,12 +42,29 @@ Monitoring errors:
 
 
 def diagnose(state: IncidentState) -> dict[str, Any]:
-    """Diagnose the incident from monitoring evidence using structured LLM output."""
+    """Diagnose current evidence; never retain an actionable stale diagnosis."""
+    cleared = {
+        "suspected_root_cause": None,
+        "diagnosis_confidence": None,
+        "diagnosis_evidence": [],
+        "needs_more_evidence": None,
+        "requested_evidence": [],
+        "recommended_action": None,
+    }
+
+    # The default mock demonstration must remain offline and cannot drive recovery.
+    if state.observation_source == "simulated":
+        return {
+            **cleared,
+            "execution_history": ["Diagnostic Agent skipped simulated observations (offline demo)."],
+        }
+
     settings = load_settings()
 
     # Do not attempt an LLM call when the Gemini API key is unavailable.
     if not settings.gemini_api_key.get_secret_value():
         return {
+            **cleared,
             "errors": [
                 "Diagnostic Agent: GEMINI_API_KEY is not configured."
             ],
@@ -53,19 +73,14 @@ def diagnose(state: IncidentState) -> dict[str, Any]:
             ],
         }
 
-    # Use the configured Gemini model for deterministic structured diagnosis.
-    llm = ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        google_api_key=settings.gemini_api_key.get_secret_value(),
-    )
-
-    # Force the model response to follow the existing Diagnosis Pydantic schema.
-    structured_llm = llm.with_structured_output(Diagnosis)
-
-    prompt = _load_prompt()
-    evidence = _build_evidence(state)
-
     try:
+        llm = ChatGoogleGenerativeAI(
+            model=settings.llm_model,
+            google_api_key=settings.gemini_api_key.get_secret_value(),
+        )
+        structured_llm = llm.with_structured_output(Diagnosis)
+        prompt = _load_prompt()
+        evidence = _build_evidence(state)
         diagnosis = structured_llm.invoke(
             f"""
 {prompt}
@@ -77,10 +92,12 @@ MONITORING EVIDENCE
 Return the structured diagnosis now.
 """
         )
+        diagnosis = Diagnosis.model_validate(diagnosis)
     except Exception as exc:
         return {
+            **cleared,
             "errors": [
-                f"Diagnostic Agent: {type(exc).__name__}: {exc}"
+                f"Diagnostic Agent failed ({type(exc).__name__})."
             ],
             "execution_history": [
                 "Diagnostic Agent failed while generating the diagnosis."
@@ -105,5 +122,3 @@ Return the structured diagnosis now.
             )
         ],
     }
-
-    

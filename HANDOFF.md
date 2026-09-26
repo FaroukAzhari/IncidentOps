@@ -1,10 +1,11 @@
-# Student 2 handoff to Student 3
+# Student 3 handoff to Student 4
 
 ## Completed scope
 
 Student 2 owns the local test environment and fault injection. Student 3 owns
-Diagnostic and Recovery Agents. Student 1's Monitoring Agent, shared state,
-graph, and checkpoint contracts are preserved.
+Diagnostic and Recovery Agents. Student 1's Monitoring Agent and the shared
+state/checkpoint contracts are preserved. Student 3 adds bounded
+diagnosis-to-monitoring routing to the shared graph.
 
 - Main API on port 8001: GET /health, GET /profile, GET /logs, GET /metrics.
 - Auth service on port 8002: GET /health and POST /validate.
@@ -13,7 +14,7 @@ graph, and checkpoint contracts are preserved.
 - Four injection functions, reset_all_faults, and a command-line controller.
 - Local HTTP/SQLite monitoring with --local; mock mode remains the default.
 - Bounded calls, sanitized collection errors, recent logs and measured metrics.
-- 54 automated tests, including Student 1 tests and all four fault scenarios.
+- 88 automated tests, including existing Student 1/2 coverage and diagnosis/recovery regressions.
 
 ## Setup
 
@@ -31,7 +32,11 @@ python -m pytest -q
 python -m pip check
 ```
 
-No Anthropic key is needed for Student 2. Student 3 adds a key locally for diagnosis.
+Set `GEMINI_API_KEY` locally for diagnosis and use `LLM_MODEL=gemini-3.5-flash-lite`.
+No key is needed for the offline demo or automated tests. Without a key, local
+diagnosis records an error and recovery is skipped.
+Validation uses Python 3.12, the real local-service/recovery paths, and stubbed
+Gemini responses. Live Gemini requests still require a valid key and model access.
 Never commit .env, virtual environments, or database files.
 
 Run each service in its own activated terminal:
@@ -80,11 +85,18 @@ Connection failures or invalid responses mean unknown: the health key is omitted
 and an error is recorded. A valid unhealthy 503 response produces healthy=false.
 Fault-storage failures are collection errors, not confirmed outages.
 
-## Student 3 work
+## Student 3 implementation
 
-Implement Diagnostic and Recovery Agents, real structured output using
-ChatAnthropic.with_structured_output(Diagnosis), allowlisted recovery actions,
-attempt accounting, and bounded evidence routing. State mappings are in README.
+Diagnostic and Recovery Agents use
+`ChatGoogleGenerativeAI.with_structured_output(Diagnosis)`, allowlisted recovery
+actions, attempt accounting, and bounded evidence routing. State mappings are in
+README. Diagnosis clears stale recommendations on failure. Recovery requires a
+current diagnosis with sufficient evidence and `local_services` provenance.
+
+Additional monitoring passes are bounded by `max_evidence_attempts` (default 2),
+independently of `max_recovery_attempts`. Unsupported or inconsistent evidence
+requests fail validation. The default mock graph stays offline and performs no
+recovery writes, even when credentials are configured.
 
 Fault injection functions are in environment.fault_controller. Recovery may use
 environment.fault_state.set_fault(name, False) to clear a specific flag. Avoid
@@ -96,9 +108,11 @@ Never let Monitoring diagnose or resolve incidents. Bound evidence loops separat
 from recovery attempts. Keep mock tools and offline tests.
 
 Student 4 owns verification, final retry routing, UI, and evaluation. The current
-finalizer returns monitoring_only and incident_resolved=False. Change terminal
-semantics when the real workflow is implemented; recovery success alone does not
-prove resolution. There is no IncidentOps UI on port 8000 yet.
+finalizer always returns incident_resolved=False. Provisional statuses are
+monitoring_only, diagnosis_failed, evidence_exhausted, recovery_skipped, and
+awaiting_verification. Student 4 must add independent health/profile checks,
+verification-based retries, and verified terminal outcomes. Recovery success
+alone does not prove resolution. There is no IncidentOps UI on port 8000 yet.
 
 ## Sequential Git workflow
 

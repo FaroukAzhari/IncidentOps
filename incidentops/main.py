@@ -29,7 +29,8 @@ def main() -> None:
     config = {"configurable": {"thread_id": args.thread_id or state.incident_id}}
     graph = build_graph(tools=LocalMonitoringTools(settings) if args.local else None)
     print(("LOCAL SERVICE observations" if args.local else "SIMULATED observations")
-          + "; diagnosis/recovery/verification are placeholders.")
+          + ("; Gemini diagnosis and targeted recovery enabled; verification pending."
+             if args.local else "; offline monitoring demo; diagnosis and recovery skipped."))
     print(f"Thread: {config['configurable']['thread_id']}")
     print("Initial state:", state.model_dump_json(indent=2))
     for update in graph.stream(state.model_dump(), config=config, stream_mode="updates"):
