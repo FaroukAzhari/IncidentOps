@@ -1,219 +1,300 @@
-# IncidentOps
+﻿# IncidentOps
 
-## Student 3 progress: diagnosis and targeted recovery
+IncidentOps is a course project that coordinates four specialist LangGraph nodes:
+Monitoring, Diagnostic, Recovery, and Verification. It investigates a local
+FastAPI/authentication/SQLite system, applies allowlisted repairs, independently
+tests the result, and retries within explicit limits.
 
-The local services, SQLite user database, shared fault controller, and real
-monitoring adapter are implemented. Student 3 adds Gemini structured diagnosis,
-bounded evidence requests, and targeted recovery. Student 2's environment and
-monitoring tools are preserved. Verification remains Student 4's responsibility.
+The live Diagnostic Agent uses **`gemini-3.5-flash-lite`** through LangChain
+structured output. Monitoring, Recovery, and Verification execute deterministic
+tools; they do not need extra LLM calls to perform fixed checks or approved actions.
 
-From an activated Python 3.12 environment, initialize the database with
-`python -m environment.database`. Run these in separate terminals:
+## Quick start: backend and UI
+
+Use Python **3.12**. From the repository root in PowerShell:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+python -m uvicorn incidentops.api:app --host 127.0.0.1 --port 8000
+```
+
+Open **http://127.0.0.1:8000**. The same backend serves the UI; there is no separate
+frontend build. API documentation is at http://127.0.0.1:8000/docs.
+
+The default **Isolated demo** runs the actual FastAPI service endpoints, fault
+store, SQLite database, monitoring, recovery, verification, and graph in a temporary
+environment. HTTP is dispatched in process using TestClient/MockTransport. Its
+Diagnostic Agent is an explicit deterministic test double that reads observations;
+it does not call Gemini or use the scenario label to choose a diagnosis. Demo
+results demonstrate integration, **not LLM reasoning quality**. No key or separately
+running services are needed. The UI labels the mode and shows every completed step,
+state update, recovery attempt, verification check, retry, and final outcome.
+
+The original observation-only mock remains available:
+
+```powershell
+python -m incidentops.main
+```
+
+For the complete deterministic workflow:
+
+```powershell
+python -m incidentops.main --demo auth_down
+python -m incidentops.main --demo multiple_faults
+python -m incidentops.main --demo persistent_auth
+```
+
+On macOS/Linux use `python3.12`, `source .venv/bin/activate`, and `.venv/bin/python`.
+
+## Live Gemini mode and local services
+
+Set `GEMINI_API_KEY` in the ignored `.env` file and leave
+`LLM_MODEL=gemini-3.5-flash-lite`. Then initialize the database:
+
+```powershell
+python -m environment.database
+```
+
+Run these in separate activated terminals:
 
 ```powershell
 python -m uvicorn environment.auth_service.main:app --host 127.0.0.1 --port 8002
 python -m uvicorn environment.app_service.main:app --host 127.0.0.1 --port 8001
+python -m uvicorn incidentops.api:app --host 127.0.0.1 --port 8000
 ```
 
-In a third terminal:
+In another terminal, inject a supported fault and run the workflow:
 
 ```powershell
-python -m incidentops.main --local
 python -m environment.fault_controller inject auth_down
 python -m incidentops.main --local "Users cannot log in"
-python -m environment.fault_controller reset
+python -m environment.fault_controller status
 ```
 
-Without `--local`, the original fixed mock observations remain available.
-Restart the main service after code changes. API `/logs` returns the latest 100
-in-memory application log entries; `/metrics` returns measured request duration
-and request/error counts. These reset when the API restarts. Exercise `/profile`
-with the `Authorization: Bearer demo-token` header to generate dependency-failure
-evidence. This token is a fixed demo credential, not production authentication.
-Monitoring does not itself call `/profile`.
+Alternatively select **Local services · Gemini** in the UI. This mode observes and
+repairs the configured running services; the scenario dropdown is disabled and no
+fault is injected by the workflow. Faults can be reset explicitly with
+`python -m environment.fault_controller reset`. All processes must share the same
+`.env`/database paths. Services observe persistent flag changes without restart.
+Restart services after code changes.
 
-The four supported faults are `auth_down`, `database_down`, `api_degraded`, and
-`wrong_db_config`. Faults persist separately in `data/faults.db`. A configuration
-fault makes profile requests fail while the independent SQLite probe remains
-healthy. Unreachable or invalid observations are recorded as collection errors
-and omitted from health state rather than asserted unhealthy.
+Missing keys, invalid structured output, model errors, and unknown observations
+cannot authorize recovery. Errors are recorded and previous actionable diagnosis
+fields are cleared. Live model calls require valid credentials and model access;
+a successful offline evaluation is not proof of those external prerequisites.
 
-Database locations and HTTP timeout are configurable through `.env.example`'s
-settings. SQLite files and `.env` are ignored by Git. Set `GEMINI_API_KEY` locally
-to enable diagnosis in `--local` mode; the offline demo needs no key.
+## Architecture and responsibilities
 
-Multi-Agent IT Incident Investigation, Recovery & Verification: a university
-LangGraph project. **Current stage: Student 3 diagnosis and recovery.**
-The CLI supports diagnosis and recovery against the local test services, or a
-fixed offline monitoring fixture. It does not yet independently verify resolution.
+```mermaid
+flowchart TD
+    Input[Incident / API / CLI] --> M[Monitoring]
+    M --> D[Diagnostic]
+    D -->|More evidence and budget remains| M
+    D -->|Ready, skipped, or evidence exhausted| R[Recovery]
+    R --> V[Verification]
+    V -->|All independent checks pass| F[Finalize: resolved]
+    V -->|Failed and retries remain| Retry[Increment retry count once]
+    Retry --> D
+    V -->|Failed / diagnosis unavailable / budget exhausted| U[Finalize: unresolved]
+    F --> End[END]
+    U --> End
+```
 
-## Setup and run
+The legacy simulated observation-only mode follows the four nodes but skips live
+analysis/actions/checks and ends `monitoring_only`, never `resolved`.
 
-Target: Python 3.12. From the repository root on Windows PowerShell:
+| Agent | Owns | Tools / output |
+| --- | --- | --- |
+| Monitoring | Current objective observations | API/auth/DB health, profile probe, logs, metrics |
+| Diagnostic | Probable root cause and supported recommendation | Gemini `with_structured_output(Diagnosis)`; no mutation tools |
+| Recovery | Controlled remediation | Four targeted flag-clearing actions; attempt accounting |
+| Verification | Independent post-action evidence | Fresh API/auth/DB health, login, and profile checks |
+
+Monitoring now probes `/profile` before reading logs. This exposes a current
+configuration fault even when independent service health is green and no user has
+made a previous request. Verification repeats checks after recovery because
+pre-recovery observations cannot prove success. Health adapters may share code,
+but verification always executes fresh I/O; it never trusts Recovery's result.
+
+On verification failure, diagnosis receives fresh verification health/profile
+results. Older logs/metrics are omitted from its current evidence. If it needs more
+evidence, the existing Monitoring node refreshes the snapshot within its own budget.
+No agent parses another agent's natural-language explanation to choose a tool.
+
+## State and module contracts
+
+`incidentops/state.py` defines the Pydantic `IncidentState`. Nodes accept this
+model and return only changed fields. Existing field names are retained.
+
+| Fields | Meaning |
+| --- | --- |
+| `incident_id`, `user_report` | Incident identity and request |
+| `service_status`, `profile_check`, `logs`, `metrics` | Latest available observations |
+| `observation_source`, `evidence_source` | Local/simulated provenance; monitoring/verification freshness |
+| `collection_errors` | Current observation errors; separate from accumulated history |
+| `suspected_component`, `suspected_root_cause`, `diagnosis_confidence`, `diagnosis_evidence` | Validated structured diagnosis |
+| `recommended_action`, `needs_more_evidence`, `requested_evidence` | Recovery/evidence contract |
+| `recovery_action`, `recovery_result`, `recovery_attempts` | Actual attempted action and its outcome |
+| `verification_result`, `verification_passed` | Typed independent check results and verdict |
+| `retry_count`, `max_retries` | Verification-driven retries |
+| `evidence_attempts`, `max_evidence_attempts` | Extra evidence passes, default maximum 2 per incident |
+| `tool_calls` | Counts at the agent-tool boundary; includes attempted LLM calls |
+| `incident_resolved`, `final_status`, `termination_reason` | Explicit terminal outcome |
+| `errors`, `execution_history` | Append-only errors and execution events |
+
+Errors/history append only new entries; tool counts add by key. Other fields use
+replacement semantics. Monitoring invalidates stale verification when obtaining a
+new snapshot. Verification replaces current health/profile evidence. Each API/UI
+step retains its own state snapshot, so earlier observations remain inspectable.
+Checkpoint payloads use dictionaries, avoiding custom-object deserialization.
+
+`Diagnosis` restricts components, action identifiers, confidence bounds, and
+supported evidence requests. Action/component mismatches and recommendations
+without evidence are invalid. `RecoveryResult` describes an action outcome;
+`VerificationResult` contains five typed `CheckResult` records, a verdict, summary,
+and remaining problems. Unknown, malformed, or failed checks prevent resolution.
+
+## Retry and terminal semantics
+
+- `max_retries=2` means **one initial cycle plus at most two retries**.
+- The utility `retry` node increments `retry_count` exactly once before returning
+  to Diagnostic. It is not a fifth agent.
+- `max_recovery_attempts=3` separately limits real action attempts, including
+  failed actions. Skipped actions do not consume that budget.
+- Extra evidence collection is limited to two additional passes per incident.
+- Failed verification with a valid diagnosis and remaining budgets retries.
+  Missing/invalid diagnosis, exhausted evidence, exhausted recovery attempts, or
+  exhausted retries terminate without an infinite loop.
+- A failed verification can retry even when recovery was skipped; the retry counter
+  bounds that path independently of the action counter.
+- `resolved` requires all five independent checks to pass, including login and the
+  authenticated database-backed profile. This also handles the healthy/no-action
+  case. Recovery's own success/failure message is not the resolution criterion.
+- `unresolved` includes a reason such as `diagnosis_failed`, `evidence_exhausted`,
+  `recovery_limit`, `retries_exhausted`, or `workflow_error`.
+
+The shared runner sets a LangGraph recursion safety cap above the expected bounded
+workflow size. Callers invoking a compiled graph directly with unusually large
+custom budgets should also supply a suitable `recursion_limit`.
+
+## Supported scenarios
+
+| Scenario | Initial health (API / auth / DB) | Profile | Recovery |
+| --- | --- | --- | --- |
+| `healthy` | true / true / true | 200 | None; verification resolves |
+| `auth_down` | true / false / true | 503 | `restart_auth_service` |
+| `database_down` | true / true / false | 500 | `restore_database_availability` |
+| `api_degraded` | false / true / true | 503 | `reset_application_state` |
+| `wrong_db_config` | true / true / true | 500 | `restore_database_configuration` |
+| `multiple_faults` | true / false / false | 503 initially | Auth, then DB after failed verification |
+| `persistent_auth` | true / false / true | 503 | Deliberately blocked action; bounded unresolved outcome |
+
+The last two are isolated demonstration/evaluation scenarios. Faults are
+application-layer simulations: no real process is killed and no database is
+damaged. Recovery clears only its targeted flag. An actual stopped process or
+corrupt database is not repaired by these tools and must not be reported resolved.
+
+## Configuration
+
+Process variables override `.env`. Relative data paths resolve against the project
+root. `.env.example` contains placeholders only.
+
+| Variable | Default |
+| --- | --- |
+| `GEMINI_API_KEY` | Empty |
+| `LLM_MODEL` | `gemini-3.5-flash-lite` |
+| `INCIDENTOPS_MAX_RECOVERY_ATTEMPTS` | 3 |
+| `INCIDENTOPS_MAX_RETRIES` | 2 (allowed 0–10) |
+| `INCIDENTOPS_LLM_TIMEOUT_SECONDS` | 30 (provider retries disabled) |
+| `INCIDENTOPS_API_URL` | `http://localhost:8001` |
+| `INCIDENTOPS_AUTH_URL` | `http://localhost:8002` |
+| `INCIDENTOPS_DATABASE_PATH` | `data/incidentops.db` |
+| `INCIDENTOPS_FAULT_DATABASE_PATH` | `data/faults.db` |
+| `INCIDENTOPS_HTTP_TIMEOUT_SECONDS` | 2 |
+
+The seeded `demo` user and fixed `demo-token` are fixtures for this local lab, not
+production credentials. Keys are excluded from API responses, and bundled
+transport errors publish fixed messages or exception types, not raw bodies/keys.
+
+## API, UI, and persistence
+
+- `GET /` serves the UI; `/static/` serves its local CSS/JavaScript.
+- `GET /api/config` returns scenarios, model name, and key-presence boolean only.
+- `POST /api/incidents` accepts a validated report, mode, scenario, optional thread
+  ID, and optional retry limit. It returns final state plus per-step snapshots and
+  measured elapsed times.
+- `GET /api/incidents/{thread_id}` reads a completed incident without rerunning it.
+- `/docs` exposes the OpenAPI schema.
+
+Example body:
+
+```json
+{"report":"Users cannot log in","mode":"demo","scenario":"auth_down","max_retries":2}
+```
+
+`MemorySaver` retains checkpoints within the backend process. The API retains the
+latest 100 completed incidents and deletes checkpoints when evicting one. Existing
+thread IDs return HTTP 409 instead of replaying accumulated state. A new server
+process loses in-memory history; checkpointing is not durable database persistence.
+
+Run **one Uvicorn worker on loopback**. Workflows are serialized because live runs
+share a fault store; a concurrent start receives HTTP 409, while read routes remain
+available. This local course demo has no authentication/multi-tenant isolation and
+is not intended for public deployment. The UI shows a running indicator and renders
+the complete execution timeline when the synchronous request finishes.
+
+## Tests and evaluation
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m incidentops.main
-.\.venv\Scripts\python.exe -m incidentops.main "Profile requests return HTTP 500" --thread-id incident-001
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m pip check
+python -m pytest -q
+python -m pip check
+python -m evaluation.evaluate --output evaluation/results.json
 ```
 
-On macOS/Linux use `python3.12 -m venv .venv`, `cp .env.example .env`, and
-`.venv/bin/python` in place of `.\.venv\Scripts\python.exe`.
-With the virtual environment activated, the entry point is `python -m incidentops.main`.
-No API key, Docker, database, or external service is required for the offline demo.
-The local mode requires the initialized SQLite database and both running services.
-Diagnosis also requires `GEMINI_API_KEY`; without it, diagnosis reports an error
-and recovery is skipped. Offline mode never calls Gemini or executes recovery.
-The example report does not select a scenario: the same deterministic fixture
-always reports simulated API/database health and auth unavailability.
+If Windows temporary-directory permissions interfere, create `.pytest_cache` and
+use a fresh directory under it with `--basetemp=.pytest_cache/my-run`.
 
-Configuration lives in `incidentops/config.py`. `.env` is ignored by Git.
-Existing process environment variables override `.env`. The model defaults to
-`gemini-3.5-flash-lite` and maximum recovery attempts to 3. Keep `LLM_MODEL` set
-to this model. Local monitoring uses the configured service URLs. Recovery uses
-`INCIDENTOPS_FAULT_DATABASE_PATH`, which must match the services' fault store.
+The suite covers schemas, all four nodes, service tools, every supported scenario,
+malformed responses, missing keys, tool/model failures, exact retry boundaries,
+no-action retries, independent verification, API validation/concurrency, reducers,
+checkpoint retrieval, and measured evaluation. LLM calls are mocked in unit and
+integration tests; actual local-service endpoints and SQLite are exercised.
 
-## Architecture and current status
+`evaluation/incidents.json` is a seven-case ground-truth dataset. The runner checks
+monitoring accuracy, exact diagnosis component sequence, recovery action sequence,
+verification correctness against post-run fault/profile evidence, final outcome,
+retry count, agent-tool counts, extra observation passes, and latency. The measured
+report identifies its mode. Exact component/action sequence scoring is deliberately
+strict; a valid alternative recovery order can score lower in live evaluation.
 
-```text
-START -> monitor -> diagnose -> recover -> verify -> finalize -> END
-            ^          |                  placeholder
-            +----------+ (more evidence, within budget)
+To measure the actual configured model separately:
+
+```powershell
+python -m evaluation.evaluate --live --output evaluation/live-results.json
 ```
 
-Diagnosis can request up to `max_evidence_attempts` additional monitoring passes
-(default 2), counted separately from recovery attempts. Each pass refreshes the
-baseline snapshot. Exhaustion skips recovery. Failed verification retries and
-verified terminal outcomes remain for Student 4.
+This explicitly calls Gemini and may incur API charges. It requires the key and
+model access; there is no silent fallback. Live evaluation still uses isolated
+local-service fixtures so it cannot alter a running demonstration environment.
 
-| Role | Responsibility | Current implementation |
-| --- | --- | --- |
-| Monitoring | Collect factual health, logs, metrics | Local HTTP/SQLite adapter or deterministic offline mock tools |
-| Diagnostic | Infer probable cause using Pydantic structured output | Gemini diagnosis, validated evidence requests, stale diagnosis invalidation |
-| Recovery | Execute allowlisted actions and count attempts | Four targeted fault-clearing tools, evidence/source guards, attempt limit |
-| Verification | Independently check health and functional behavior | Explicit placeholder |
+## Repository map and audit
 
-Stack: Python 3.12, LangGraph, LangChain/Google Gemini, Pydantic, python-dotenv,
-pytest, FastAPI, Uvicorn, httpx, and Python's SQLite support. Jinja2 is reserved
-for the later UI. Dependencies are pinned in `requirements.txt`.
+- `incidentops/agents/`: four specialist nodes.
+- `incidentops/tools/`: observations, targeted recovery, independent checks.
+- `incidentops/schemas/`: diagnosis, recovery, verification, API models.
+- `incidentops/graph.py`, `state.py`, `workflow.py`: routing, shared contracts,
+  execution and trace snapshots.
+- `incidentops/api.py`, `static/`: backend and browser UI.
+- `incidentops/demo.py`: explicit deterministic diagnosis and isolated fixtures.
+- `environment/`: original services, database, and fault controller.
+- `evaluation/`: ground truth, runner, measured results.
+- `tests/`: regression, integration, API, and evaluation coverage.
+- [AUDIT.md](AUDIT.md): baseline findings and final validation record.
 
-The Monitoring Agent owns baseline evidence selection and aggregation. It does
-not need an LLM to choose these five fixed checks. Its prompt documents the role
-and is a future system-prompt resource; it is not currently sent to a model.
-
-## State and node contracts
-
-`IncidentState` is a Pydantic BaseModel. Every node accepts this state and returns
-only a dictionary of changed fields. The CLI validates the final checkpoint too;
-teammates must validate structured tool/model outputs before returning updates.
-
-| Node | Reads | Writes |
-| --- | --- | --- |
-| monitor | incident_id, requested_evidence, evidence_attempts | service_status, logs, metrics, monitoring_complete, observation_source, evidence_attempts; new errors/history |
-| diagnose | Observations, provenance, errors, user_report | Diagnosis fields, recommended_action, requested_evidence; new errors/history |
-| recover | Diagnosis, observation_source, recommendation, attempt budget | recovery_action, recovery_attempts, recovery_result; new history |
-| verify | No state fields used by placeholder; future: independent tools/recovery context | Currently new history only; future: verification_passed, incident_resolved |
-| finalize | Observation source, diagnosis and recovery outcome | Provisional final_status, incident_resolved=False; new history |
-
-Provisional statuses are `monitoring_only` (offline demo), `diagnosis_failed`,
-`evidence_exhausted`, `recovery_skipped`, and `awaiting_verification` (an action
-was attempted, whether it succeeded or failed). None proves incident resolution.
-
-`errors` and `execution_history` use append reducers. Return **only new entries**,
-not the entire existing list. Other fields use replacement semantics. Health,
-logs, and metrics describe the latest collection, preventing stale evidence from
-surviving a failed repeated check. Checkpoint history preserves earlier snapshots.
-`monitoring_complete` means all checks were attempted, even if some failed.
-
-`service_status` holds known booleans only. Missing keys mean unknown/unavailable
-observations, not confirmed unhealthy services. A healthy=False response is valid
-evidence; a collection exception/error is recorded separately. All five checks
-are attempted independently. Evidence provenance is stored in `observation_source`.
-
-### Monitoring adapter
-
-Implement `MonitoringTools` and pass the instance to `build_graph(tools=adapter)`:
-
-| Method | Return type |
-| --- | --- |
-| check_api_health / check_auth_health / check_database_health | HealthResult(service, healthy, status_code, details, error) |
-| get_application_logs | LogsResult(logs, error) |
-| get_service_metrics | MetricsResult(metrics, error) |
-
-Adapters expose `observation_source`: `simulated` for mock tools and
-`local_services` for the local adapter. They must enforce finite I/O timeouts. Error-bearing results
-are excluded from the current observation snapshot. Exceptions and invalid results
-are recorded without preventing remaining checks. Return validated models; do not
-put credentials in errors, logs, or tool details because state is visible in the CLI.
-`requested_evidence` accepts only `api_health`, `auth_health`, `database_health`,
-`application_logs`, and `service_metrics`. It must be nonempty exactly when
-`needs_more_evidence` is true; it never executes arbitrary commands.
-
-### Structured outputs
-
-`Diagnosis` maps `probable_cause` to `suspected_root_cause`, `confidence` to
-`diagnosis_confidence`, `evidence` to `diagnosis_evidence`, and the two identically
-named fields to `needs_more_evidence` and `recommended_action`. Include
-`suspected_component` in the root-cause description, for example
-`"auth: connection refused"`. Diagnosis uses
-`ChatGoogleGenerativeAI.with_structured_output(Diagnosis)` with the configured
-Gemini model. Missing credentials, model failures, and invalid output clear the
-previous diagnosis and recommendation so checkpoint replay cannot act on them.
-
-`RecoveryResult.action` maps to `recovery_action`; `succeeded` and `details` map
-to a readable `recovery_result`, for example `"failed: dependency unavailable"`.
-Only a real attempted action increments `recovery_attempts`. Action success is
-not independent verification. Recovery requires local-service evidence and a
-current diagnosis that does not request more evidence. Skipped recovery clears
-the previous action/result without incrementing the attempt count.
-
-## Checkpointing and visible state changes
-
-The CLI prints initial state, each node's partial update, and final state. Each
-graph has a retained `MemorySaver`, optionally supplied by the caller:
-
-```python
-from langgraph.checkpoint.memory import MemorySaver
-from incidentops.graph import build_graph
-from incidentops.state import IncidentState
-
-saver = MemorySaver()
-graph = build_graph(checkpointer=saver)
-config = {"configurable": {"thread_id": "incident-001"}}
-initial = IncidentState(incident_id="incident-001", user_report="Login failed")
-result = graph.invoke(initial.model_dump(), config)
-print(graph.get_state(config).values)
-print(list(graph.get_state_history(config)))
-```
-
-Reuse the **same graph/checkpointer and thread ID in the same process** to inspect
-an incident. Use different thread IDs for different incidents. A new CLI process
-creates a new saver; reusing its thread ID does not restore an old process's state.
-MemorySaver is in-memory checkpointing, not durable storage or cross-process memory.
-Reinvoking the graph starts another traversal and appends history; it is not a
-read-only checkpoint lookup. Do not replay a full prior state into append reducers.
-
-## Team handoff and remaining course requirements
-
-| Student | Ownership |
-| --- | --- |
-| 1 | Skeleton, shared state/config, graph/checkpointing, monitoring, CLI/tests |
-| 2 | Local main/auth services, SQLite, faults, logs/metrics, real monitoring adapter |
-| 3 | Diagnostic and Recovery Agents/tools, structured output, attempt accounting, bounded evidence routing |
-| 4 | Verification Agent, conditional recovery loop, UI, evaluation and demo |
-
-Implemented rubric foundations: typed state with varied data and nullable fields,
-partial updates, MemorySaver/thread IDs, specialized observation tools, visible
-state evolution, structured diagnosis, targeted recovery, and bounded evidence
-routing. Remaining work includes independent verification, verification-driven
-retries, UI, evaluation, and the final demonstration. Automated tests stub Gemini
-and exercise the real monitoring/recovery paths without credentials or network calls.
-
-`environment/` contains runnable main/auth FastAPI services and local fault control.
-`evaluation/incidents.json` is intentionally empty and the evaluation harness is
-not implemented. There is no IncidentOps HTTP API or web UI yet.
-See [HANDOFF.md](HANDOFF.md) for the Student 4 handoff and sequential Git workflow.
+Existing working environment modules were preserved. Changes to earlier agents
+address observed integration gaps rather than stylistic rewrites. The historical
+student allocation is recorded in the audit; the final system is organized by
+agent responsibilities rather than contributor labels.

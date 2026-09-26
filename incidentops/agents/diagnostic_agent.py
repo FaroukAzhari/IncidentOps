@@ -2,8 +2,9 @@ from pathlib import Path
 from typing import Any
 
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, SystemMessage
 
-from incidentops.config import load_settings
+from incidentops.config import Settings, load_settings
 from incidentops.schemas.diagnosis import Diagnosis
 from incidentops.state import IncidentState
 
@@ -28,23 +29,31 @@ Current service health:
 {state.service_status}
 
 Application logs:
-{state.logs}
+{state.logs if state.evidence_source == 'monitoring' else 'Prior monitoring logs omitted; use fresh verification below.'}
 
 Service metrics:
-{state.metrics}
+{state.metrics if state.evidence_source == 'monitoring' else {}}
+
+Current profile probe:
+{state.profile_check.model_dump() if state.profile_check else None}
+
+Latest evidence source: {state.evidence_source}
+Latest verification:
+{state.verification_result.model_dump() if state.verification_result else None}
 
 Monitoring source:
 {state.observation_source}
 
 Monitoring errors:
-{state.errors}
+{state.collection_errors}
 """.strip()
 
 
-def diagnose(state: IncidentState) -> dict[str, Any]:
+def diagnose(state: IncidentState, *, settings: Settings | None = None) -> dict[str, Any]:
     """Diagnose current evidence; never retain an actionable stale diagnosis."""
     cleared = {
         "suspected_root_cause": None,
+        "suspected_component": None,
         "diagnosis_confidence": None,
         "diagnosis_evidence": [],
         "needs_more_evidence": None,
@@ -59,7 +68,7 @@ def diagnose(state: IncidentState) -> dict[str, Any]:
             "execution_history": ["Diagnostic Agent skipped simulated observations (offline demo)."],
         }
 
-    settings = load_settings()
+    settings = settings or load_settings()
 
     # Do not attempt an LLM call when the Gemini API key is unavailable.
     if not settings.gemini_api_key.get_secret_value():
@@ -73,29 +82,24 @@ def diagnose(state: IncidentState) -> dict[str, Any]:
             ],
         }
 
+    calls = {}
     try:
         llm = ChatGoogleGenerativeAI(
             model=settings.llm_model,
             google_api_key=settings.gemini_api_key.get_secret_value(),
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
         )
         structured_llm = llm.with_structured_output(Diagnosis)
         prompt = _load_prompt()
         evidence = _build_evidence(state)
-        diagnosis = structured_llm.invoke(
-            f"""
-{prompt}
-
-MONITORING EVIDENCE
--------------------
-{evidence}
-
-Return the structured diagnosis now.
-"""
-        )
+        calls = {"diagnose.llm": 1}
+        diagnosis = structured_llm.invoke([SystemMessage(content=prompt), HumanMessage(content=evidence)])
         diagnosis = Diagnosis.model_validate(diagnosis)
     except Exception as exc:
         return {
             **cleared,
+            "tool_calls": calls,
             "errors": [
                 f"Diagnostic Agent failed ({type(exc).__name__})."
             ],
@@ -106,6 +110,8 @@ Return the structured diagnosis now.
 
     # Return only the IncidentState fields updated by the Diagnostic Agent.
     return {
+        "suspected_component": diagnosis.suspected_component,
+        "tool_calls": calls,
         "suspected_root_cause": (
             f"{diagnosis.suspected_component}: {diagnosis.probable_cause}"
         ),

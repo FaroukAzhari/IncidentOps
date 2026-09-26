@@ -8,7 +8,8 @@ from incidentops.tools.monitoring_tools import MockMonitoringTools
 def test_graph_updates_checkpoints_and_honest_placeholders():
     saver = MemorySaver()
     graph = build_graph(checkpointer=saver)
-    assert graph.checkpointer is saver
+    # Strict serializer mode may wrap the supplied saver. Verify persisted data
+    # through that supplied saver below rather than relying on object identity.
     config = {"configurable": {"thread_id": "incident-001"}}
     initial = IncidentState(incident_id="a", user_report="Login failed")
     updates = list(graph.stream(initial.model_dump(), config, stream_mode="updates"))
@@ -19,7 +20,10 @@ def test_graph_updates_checkpoints_and_honest_placeholders():
     assert final.suspected_root_cause is final.verification_passed is final.recovery_result is None
     assert final.recovery_attempts == 0
     assert len(final.execution_history) == len(set(final.execution_history)) == 5
-    assert saver.get_tuple(config) is not None
+    saved = saver.get_tuple(config)
+    assert saved is not None
+    assert saved.checkpoint["channel_values"]["incident_id"] == initial.incident_id
+    assert saved.checkpoint["channel_values"]["execution_history"] == final.execution_history
     history = list(graph.get_state_history(config))
     assert any(s.values.get("monitoring_complete") and s.values.get("final_status") is None for s in history)
 

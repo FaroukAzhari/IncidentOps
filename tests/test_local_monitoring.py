@@ -19,7 +19,7 @@ from incidentops.tools.local_monitoring_tools import LocalMonitoringTools
     ("wrong_db_config", {"api": True, "auth": True, "database": True}),
 ])
 def test_real_service_contracts_through_unchanged_graph(tmp_path, fault, expected, diagnostic_model):
-    settings = Settings(database_path=tmp_path / "app.db", fault_database_path=tmp_path / "faults.db")
+    settings = Settings(gemini_api_key="offline-test-key", database_path=tmp_path / "app.db", fault_database_path=tmp_path / "faults.db")
     initialize_database(settings.database_path)
     if fault:
         set_fault(fault, path=settings.fault_database_path)
@@ -31,11 +31,11 @@ def test_real_service_contracts_through_unchanged_graph(tmp_path, fault, expecte
             api.get("/profile", headers={"Authorization": "Bearer demo-token"})
             def request(request):
                 client = auth if request.url.port == 8002 else api
-                response = client.get(request.url.path)
+                response = client.request(request.method, request.url.path, content=request.content, headers=request.headers)
                 return httpx.Response(response.status_code, json=response.json())
             tools = LocalMonitoringTools(settings, httpx.MockTransport(request))
             result = build_graph(tools=tools).invoke(
-                {"incident_id": "test", "user_report": "profile failed"},
+                {"incident_id": "test", "user_report": "profile failed", "max_retries": 0},
                 {"configurable": {"thread_id": "local-test"}},
             )
             assert result["service_status"] == expected

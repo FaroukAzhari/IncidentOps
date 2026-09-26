@@ -1,3 +1,6 @@
-TODO Student 3: execute only allowlisted recovery actions. Account for each real
-attempt and record its outcome. Never use unrestricted shell execution or claim
-independent verification.
+Recovery Agent role contract (enforced by deterministic code, not an LLM call):
+Consume the validated current diagnosis. Execute only approved recovery actions
+against the configured local fault store. Reject simulated evidence, incomplete
+diagnoses, unsupported actions, and exhausted budgets. Count each real attempted
+action once, including failed attempts. Preserve unrelated faults. Report the
+action outcome, never incident resolution; Verification independently checks it.

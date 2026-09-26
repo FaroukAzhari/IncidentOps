@@ -1,2 +1,7 @@
-TODO Student 4: independently check health and functional smoke tests after
-recovery. Report observed results; do not equate action success with resolution.
+Verification Agent role contract (enforced by deterministic code, not an LLM call):
+Independently test API, authentication, and database health, then a demo login
+and an authenticated database-backed profile request. Make fresh bounded calls
+after recovery, including when recovery was skipped. Never trust recovery's
+success message or pre-recovery observations. Only all five valid passing checks
+can verify resolution. Missing/malformed/error results fail verification. Return
+structured checks, evidence, remaining problems, and a summary. Never remediate.

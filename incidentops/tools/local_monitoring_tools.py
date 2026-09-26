@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict
 
 from environment.fault_state import get_fault_state
 from incidentops.config import Settings
+from incidentops.schemas.verification import CheckResult
+from incidentops.tools.functional_checks import check_profile
 from incidentops.tools.monitoring_tools import HealthResult, LogsResult, MetricsResult
 
 
@@ -45,6 +47,10 @@ class LocalMonitoringTools:
 
     def check_api_health(self) -> HealthResult:
         return self._health("api", self.settings.api_url)
+
+    def probe_profile(self) -> CheckResult:
+        """Expose current dependency/configuration failures before reading logs."""
+        return check_profile(self.settings, self.transport)
 
     def check_auth_health(self) -> HealthResult:
         return self._health("auth", self.settings.auth_url)

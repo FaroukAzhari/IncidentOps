@@ -22,7 +22,9 @@ def test_tool_contracts_and_partial_update():
     assert update["monitoring_complete"] is True
     assert update["errors"] == []
     assert set(update) == {"service_status", "logs", "metrics", "monitoring_complete",
-                           "observation_source", "errors", "execution_history"}
+                           "observation_source", "errors", "execution_history", "collection_errors",
+                           "profile_check", "evidence_source", "verification_passed", "verification_result",
+                           "incident_resolved", "final_status", "termination_reason", "tool_calls"}
 
 
 @pytest.mark.parametrize("method,missing", [
