@@ -1,11 +1,11 @@
 # IncidentOps
 
-## Student 2 progress: local environment and monitoring
+## Student 3 progress: diagnosis and targeted recovery
 
 The local services, SQLite user database, shared fault controller, and real
-monitoring adapter are now implemented. Diagnosis, recovery, and verification
-remain placeholders for Students 3 and 4. Student 2 owns the local environment,
-fault injection, logs, metrics, and real monitoring integration.
+monitoring adapter are implemented. Student 3 adds Gemini structured diagnosis,
+bounded evidence requests, and targeted recovery. Student 2's environment and
+monitoring tools are preserved. Verification remains Student 4's responsibility.
 
 From an activated Python 3.12 environment, initialize the database with
 `python -m environment.database`. Run these in separate terminals:
@@ -39,12 +39,13 @@ healthy. Unreachable or invalid observations are recorded as collection errors
 and omitted from health state rather than asserted unhealthy.
 
 Database locations and HTTP timeout are configurable through `.env.example`'s
-settings. SQLite files and `.env` are ignored by Git. No API key is needed yet.
+settings. SQLite files and `.env` are ignored by Git. Set `GEMINI_API_KEY` locally
+to enable diagnosis in `--local` mode; the offline demo needs no key.
 
 Multi-Agent IT Incident Investigation, Recovery & Verification: a university
-LangGraph project. **Current stage: Student 2 environment and real monitoring.**
-The CLI supports local services or a fixed offline evidence fixture. It
-does not diagnose, repair, verify, or resolve a real incident.
+LangGraph project. **Current stage: Student 3 diagnosis and recovery.**
+The CLI supports diagnosis and recovery against the local test services, or a
+fixed offline monitoring fixture. It does not yet independently verify resolution.
 
 ## Setup and run
 
@@ -65,35 +66,38 @@ On macOS/Linux use `python3.12 -m venv .venv`, `cp .env.example .env`, and
 With the virtual environment activated, the entry point is `python -m incidentops.main`.
 No API key, Docker, database, or external service is required for the offline demo.
 The local mode requires the initialized SQLite database and both running services.
+Diagnosis also requires `GEMINI_API_KEY`; without it, diagnosis reports an error
+and recovery is skipped. Offline mode never calls Gemini or executes recovery.
 The example report does not select a scenario: the same deterministic fixture
 always reports simulated API/database health and auth unavailability.
 
 Configuration lives in `incidentops/config.py`. `.env` is ignored by Git.
 Existing process environment variables override `.env`. The model defaults to
-`claude-haiku-4-5` and maximum recovery attempts to 3. The key may stay empty;
-no model is instantiated or called. Local monitoring uses the configured service URLs.
+`gemini-3.5-flash-lite` and maximum recovery attempts to 3. Keep `LLM_MODEL` set
+to this model. Local monitoring uses the configured service URLs. Recovery uses
+`INCIDENTOPS_FAULT_DATABASE_PATH`, which must match the services' fault store.
 
 ## Architecture and current status
 
 ```text
 START -> monitor -> diagnose -> recover -> verify -> finalize -> END
-         working   placeholder placeholder placeholder  monitoring_only
+            ^          |                  placeholder
+            +----------+ (more evidence, within budget)
 ```
 
-The intended final graph will route diagnosis back to monitoring for additional
-evidence and failed verification back to diagnosis while attempts remain.
-Successful verification or exhaustion will terminate. These conditional edges
-are **not implemented yet**. Evidence requests also need their own finite budget;
-a recovery-attempt limit alone cannot bound a monitor/diagnose loop.
+Diagnosis can request up to `max_evidence_attempts` additional monitoring passes
+(default 2), counted separately from recovery attempts. Each pass refreshes the
+baseline snapshot. Exhaustion skips recovery. Failed verification retries and
+verified terminal outcomes remain for Student 4.
 
 | Role | Responsibility | Current implementation |
 | --- | --- | --- |
 | Monitoring | Collect factual health, logs, metrics | Local HTTP/SQLite adapter or deterministic offline mock tools |
-| Diagnostic | Infer probable cause using Pydantic structured output | Schema and explicit placeholder |
-| Recovery | Execute allowlisted actions and count attempts | Result schema and explicit placeholder |
+| Diagnostic | Infer probable cause using Pydantic structured output | Gemini diagnosis, validated evidence requests, stale diagnosis invalidation |
+| Recovery | Execute allowlisted actions and count attempts | Four targeted fault-clearing tools, evidence/source guards, attempt limit |
 | Verification | Independently check health and functional behavior | Explicit placeholder |
 
-Stack: Python 3.12, LangGraph, LangChain/Anthropic, Pydantic, python-dotenv,
+Stack: Python 3.12, LangGraph, LangChain/Google Gemini, Pydantic, python-dotenv,
 pytest, FastAPI, Uvicorn, httpx, and Python's SQLite support. Jinja2 is reserved
 for the later UI. Dependencies are pinned in `requirements.txt`.
 
@@ -109,11 +113,15 @@ teammates must validate structured tool/model outputs before returning updates.
 
 | Node | Reads | Writes |
 | --- | --- | --- |
-| monitor | incident_id; future selection may use user_report/requested_evidence | service_status, logs, metrics, monitoring_complete, observation_source; new errors/history |
-| diagnose | No state fields used by placeholder; future: observations and request context | Currently new history only; future: diagnosis fields and requested_evidence |
-| recover | No state fields used by placeholder; future: recommendation and attempt budget | Currently new history only; future: recovery_action, recovery_attempts, recovery_result |
+| monitor | incident_id, requested_evidence, evidence_attempts | service_status, logs, metrics, monitoring_complete, observation_source, evidence_attempts; new errors/history |
+| diagnose | Observations, provenance, errors, user_report | Diagnosis fields, recommended_action, requested_evidence; new errors/history |
+| recover | Diagnosis, observation_source, recommendation, attempt budget | recovery_action, recovery_attempts, recovery_result; new history |
 | verify | No state fields used by placeholder; future: independent tools/recovery context | Currently new history only; future: verification_passed, incident_resolved |
-| finalize | No state fields used at this stage | final_status="monitoring_only", incident_resolved=False; new history |
+| finalize | Observation source, diagnosis and recovery outcome | Provisional final_status, incident_resolved=False; new history |
+
+Provisional statuses are `monitoring_only` (offline demo), `diagnosis_failed`,
+`evidence_exhausted`, `recovery_skipped`, and `awaiting_verification` (an action
+was attempted, whether it succeeded or failed). None proves incident resolution.
 
 `errors` and `execution_history` use append reducers. Return **only new entries**,
 not the entire existing list. Other fields use replacement semantics. Health,
@@ -141,22 +149,27 @@ Adapters expose `observation_source`: `simulated` for mock tools and
 are excluded from the current observation snapshot. Exceptions and invalid results
 are recorded without preventing remaining checks. Return validated models; do not
 put credentials in errors, logs, or tool details because state is visible in the CLI.
-`requested_evidence` is reserved for supported future requests, not arbitrary commands.
+`requested_evidence` accepts only `api_health`, `auth_health`, `database_health`,
+`application_logs`, and `service_metrics`. It must be nonempty exactly when
+`needs_more_evidence` is true; it never executes arbitrary commands.
 
-### Future structured outputs
+### Structured outputs
 
 `Diagnosis` maps `probable_cause` to `suspected_root_cause`, `confidence` to
 `diagnosis_confidence`, `evidence` to `diagnosis_evidence`, and the two identically
 named fields to `needs_more_evidence` and `recommended_action`. Include
 `suspected_component` in the root-cause description, for example
-`"auth: connection refused"`. Student 3 must implement a real
-`ChatAnthropic.with_structured_output(Diagnosis)` call; defining the schema alone
-does not meet the structured-output rubric.
+`"auth: connection refused"`. Diagnosis uses
+`ChatGoogleGenerativeAI.with_structured_output(Diagnosis)` with the configured
+Gemini model. Missing credentials, model failures, and invalid output clear the
+previous diagnosis and recommendation so checkpoint replay cannot act on them.
 
 `RecoveryResult.action` maps to `recovery_action`; `succeeded` and `details` map
 to a readable `recovery_result`, for example `"failed: dependency unavailable"`.
 Only a real attempted action increments `recovery_attempts`. Action success is
-not independent verification. Placeholders leave all such fields untouched.
+not independent verification. Recovery requires local-service evidence and a
+current diagnosis that does not request more evidence. Skipped recovery clears
+the previous action/result without incrementing the attempt count.
 
 ## Checkpointing and visible state changes
 
@@ -195,11 +208,12 @@ read-only checkpoint lookup. Do not replay a full prior state into append reduce
 
 Implemented rubric foundations: typed state with varied data and nullable fields,
 partial updates, MemorySaver/thread IDs, specialized observation tools, visible
-state evolution. Remaining rubric work: real diagnostic structured-output calls,
-at least three implemented agent roles, different working agent toolsets,
-conditional edges/retries, and an end-to-end recovery demonstration.
+state evolution, structured diagnosis, targeted recovery, and bounded evidence
+routing. Remaining work includes independent verification, verification-driven
+retries, UI, evaluation, and the final demonstration. Automated tests stub Gemini
+and exercise the real monitoring/recovery paths without credentials or network calls.
 
 `environment/` contains runnable main/auth FastAPI services and local fault control.
 `evaluation/incidents.json` is intentionally empty and the evaluation harness is
 not implemented. There is no IncidentOps HTTP API or web UI yet.
-See [HANDOFF.md](HANDOFF.md) for the Student 2 to Student 3 handoff and sequential Git workflow.
+See [HANDOFF.md](HANDOFF.md) for the Student 4 handoff and sequential Git workflow.

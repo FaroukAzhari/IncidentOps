@@ -18,7 +18,7 @@ from incidentops.tools.local_monitoring_tools import LocalMonitoringTools
     ("api_degraded", {"api": False, "auth": True, "database": True}),
     ("wrong_db_config", {"api": True, "auth": True, "database": True}),
 ])
-def test_real_service_contracts_through_unchanged_graph(tmp_path, fault, expected):
+def test_real_service_contracts_through_unchanged_graph(tmp_path, fault, expected, diagnostic_model):
     settings = Settings(database_path=tmp_path / "app.db", fault_database_path=tmp_path / "faults.db")
     initialize_database(settings.database_path)
     if fault:
