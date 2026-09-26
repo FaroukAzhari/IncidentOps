@@ -1,12 +1,16 @@
 """Controlled Recovery Agent with allowlisted actions and attempt accounting."""
 
 from typing import Any
+from pathlib import Path
+from collections.abc import Callable
 
 from incidentops.state import IncidentState
 from incidentops.tools.recovery_tools import RECOVERY_ACTIONS, execute_recovery_action
+from incidentops.schemas.recovery import RecoveryResult
 
 
-def recover(state: IncidentState) -> dict[str, Any]:
+def recover(state: IncidentState, *, fault_database_path: Path | None = None,
+            executor: Callable | None = None) -> dict[str, Any]:
     """Execute a diagnosed recovery action when it is safe and allowed."""
 
     # Do not present a previous attempt's result as the current outcome.
@@ -70,7 +74,15 @@ def recover(state: IncidentState) -> dict[str, Any]:
         }
 
     # A real allowlisted recovery action is attempted only after all checks pass.
-    result = execute_recovery_action(recommended_action)
+    try:
+        result = RecoveryResult.model_validate((executor or execute_recovery_action)(
+            recommended_action, fault_database_path=fault_database_path,
+        ))
+        if result.action != recommended_action:
+            raise ValueError("Recovery returned a different action")
+    except Exception as exc:
+        result = RecoveryResult(action=recommended_action, succeeded=False,
+                                details=f"Recovery failed ({type(exc).__name__}).")
 
     new_attempt_count = state.recovery_attempts + 1
 
@@ -80,6 +92,7 @@ def recover(state: IncidentState) -> dict[str, Any]:
         "recovery_action": result.action,
         "recovery_attempts": new_attempt_count,
         "recovery_result": f"{outcome}: {result.details}",
+        "tool_calls": {f"recover.{recommended_action}": 1},
         "execution_history": [
             (
                 f"Recovery Agent attempted '{result.action}' "

@@ -5,6 +5,7 @@ import pytest
 from incidentops.agents import diagnostic_agent
 from incidentops.config import Settings
 from incidentops.schemas.diagnosis import Diagnosis
+from incidentops.schemas.verification import CheckResult
 from incidentops.tools import recovery_tools
 
 
@@ -31,3 +32,11 @@ def diagnostic_model(student3_settings, monkeypatch):
     )
     monkeypatch.setattr(diagnostic_agent, "ChatGoogleGenerativeAI", Mock(return_value=model))
     return model
+
+
+@pytest.fixture
+def failed_verification():
+    tools = Mock()
+    for name in ("api_health", "auth_health", "database_health", "login", "profile"):
+        getattr(tools, f"check_{name}").return_value = CheckResult(name=name, passed=False, details="Controlled failure")
+    return tools

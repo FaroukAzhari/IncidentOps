@@ -1,1 +1,9 @@
-[]
+[
+  {"id":"healthy","report":"Check that users can access their profile.","health":{"api":true,"auth":true,"database":true},"profile_pass":true,"components":["healthy"],"actions":[],"verified":true,"final_status":"resolved","retries":0},
+  {"id":"auth_down","report":"Users cannot authenticate.","health":{"api":true,"auth":false,"database":true},"profile_pass":false,"components":["auth"],"actions":["restart_auth_service"],"verified":true,"final_status":"resolved","retries":0},
+  {"id":"database_down","report":"The database-backed profile request fails.","health":{"api":true,"auth":true,"database":false},"profile_pass":false,"components":["database"],"actions":["restore_database_availability"],"verified":true,"final_status":"resolved","retries":0},
+  {"id":"api_degraded","report":"The API is degraded and cannot serve profiles.","health":{"api":false,"auth":true,"database":true},"profile_pass":false,"components":["api"],"actions":["reset_application_state"],"verified":true,"final_status":"resolved","retries":0},
+  {"id":"wrong_db_config","report":"Profile requests fail although dependency health checks are green.","health":{"api":true,"auth":true,"database":true},"profile_pass":false,"components":["database"],"actions":["restore_database_configuration"],"verified":true,"final_status":"resolved","retries":0},
+  {"id":"multiple_faults","report":"Login and database-backed profile requests are failing.","health":{"api":true,"auth":false,"database":false},"profile_pass":false,"components":["auth","database"],"actions":["restart_auth_service","restore_database_availability"],"verified":true,"final_status":"resolved","retries":1},
+  {"id":"persistent_auth","report":"Authentication remains unavailable after attempted recovery.","health":{"api":true,"auth":false,"database":true},"profile_pass":false,"components":["auth","auth","auth"],"actions":["restart_auth_service","restart_auth_service","restart_auth_service"],"verified":false,"final_status":"unresolved","retries":2}
+]

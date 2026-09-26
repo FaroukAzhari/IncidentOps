@@ -21,8 +21,10 @@ from incidentops.tools.recovery_tools import execute_recovery_action
 
 
 def diagnosis(needs_more=False, action="restart_auth_service"):
+    components = {"restore_database_availability": "database", "restore_database_configuration": "database",
+                  "reset_application_state": "api"}
     return Diagnosis(
-        suspected_component="auth", probable_cause="Authentication unavailable",
+        suspected_component=components.get(action, "auth"), probable_cause="Authentication unavailable",
         confidence=0.8, evidence=["Current auth health is false"],
         needs_more_evidence=needs_more,
         requested_evidence=["auth_health"] if needs_more else [],
@@ -35,6 +37,7 @@ def state(**changes):
         "incident_id": "student3-test", "user_report": "Users cannot log in",
         "observation_source": "local_services", "monitoring_complete": True,
         "service_status": {"api": True, "auth": False, "database": True},
+        "max_retries": 0,
         **changes,
     })
 
@@ -49,10 +52,10 @@ def test_structured_diagnosis_uses_evidence_and_configured_model(diagnostic_mode
     initial = state(logs=["auth unavailable"], metrics={"api_response_ms": 12.0})
     update = diagnostic_agent.diagnose(initial)
     diagnostic_agent.ChatGoogleGenerativeAI.assert_called_once_with(
-        model="gemini-3.5-flash-lite", google_api_key="offline-test-key",
+        model="gemini-3.5-flash-lite", google_api_key="offline-test-key", timeout=30.0, max_retries=0,
     )
     diagnostic_model.with_structured_output.assert_called_once_with(Diagnosis)
-    prompt = diagnostic_model.invoke.call_args.args[0]
+    prompt = diagnostic_model.invoke.call_args.args[0][1].content
     for value in (initial.user_report, str(initial.service_status), str(initial.logs), str(initial.metrics)):
         assert value in prompt
     assert update["suspected_root_cause"] == "auth: Authentication unavailable"
@@ -94,10 +97,10 @@ def test_invalid_evidence_requests_are_rejected(evidence_request, needed):
 
 
 @pytest.mark.parametrize("budget", [0, 1, 2])
-def test_evidence_loop_is_bounded_and_does_not_recover(diagnostic_model, student3_settings, budget):
+def test_evidence_loop_is_bounded_and_does_not_recover(diagnostic_model, student3_settings, budget, failed_verification):
     diagnostic_model.invoke.return_value = diagnosis(needs_more=True)
     set_fault("auth_down", path=student3_settings.fault_database_path)
-    graph = build_graph(LocalEvidenceFixture())
+    graph = build_graph(LocalEvidenceFixture(), verification_tools=failed_verification)
     config = {"configurable": {"thread_id": "bounded"}}
     updates = list(graph.stream(state(max_evidence_attempts=budget).model_dump(), config, stream_mode="updates"))
     nodes = [next(iter(update)) for update in updates]
@@ -105,32 +108,32 @@ def test_evidence_loop_is_bounded_and_does_not_recover(diagnostic_model, student
     assert nodes.count("monitor") == nodes.count("diagnose") == budget + 1
     assert result["evidence_attempts"] == budget
     assert result["recovery_attempts"] == 0
-    assert result["final_status"] == "evidence_exhausted"
+    assert result["final_status"] == "unresolved" and result["termination_reason"] == "evidence_exhausted"
     assert not result["incident_resolved"]
     assert get_fault_state(student3_settings.fault_database_path).auth_down
 
 
-def test_additional_evidence_then_recovery(diagnostic_model, student3_settings):
+def test_additional_evidence_then_recovery(diagnostic_model, student3_settings, failed_verification):
     diagnostic_model.invoke.side_effect = [diagnosis(needs_more=True), diagnosis()]
     set_fault("auth_down", path=student3_settings.fault_database_path)
     set_fault("database_down", path=student3_settings.fault_database_path)
-    result = build_graph(LocalEvidenceFixture()).invoke(
+    result = build_graph(LocalEvidenceFixture(), verification_tools=failed_verification).invoke(
         state().model_dump(), {"configurable": {"thread_id": "recover"}},
     )
     assert result["evidence_attempts"] == result["recovery_attempts"] == 1
     assert result["requested_evidence"] == []
     assert result["recovery_action"] == "restart_auth_service"
     assert result["recovery_result"].startswith("succeeded:")
-    assert result["final_status"] == "awaiting_verification"
-    assert result["verification_passed"] is None and not result["incident_resolved"]
+    assert result["final_status"] == "unresolved"
+    assert result["verification_passed"] is False and not result["incident_resolved"]
     faults = get_fault_state(student3_settings.fault_database_path)
     assert not faults.auth_down and faults.database_down
 
 
 @pytest.mark.parametrize("failure", ["missing_key", "invoke"])
-def test_checkpoint_replay_cannot_reuse_failed_diagnosis(diagnostic_model, student3_settings, monkeypatch, failure):
+def test_checkpoint_replay_cannot_reuse_failed_diagnosis(diagnostic_model, student3_settings, monkeypatch, failure, failed_verification):
     diagnostic_model.invoke.return_value = diagnosis()
-    graph = build_graph(LocalEvidenceFixture())
+    graph = build_graph(LocalEvidenceFixture(), verification_tools=failed_verification)
     config = {"configurable": {"thread_id": "replay"}}
     graph.invoke(state().model_dump(), config)
     set_fault("auth_down", path=student3_settings.fault_database_path)
@@ -141,7 +144,7 @@ def test_checkpoint_replay_cannot_reuse_failed_diagnosis(diagnostic_model, stude
     result = graph.invoke({"user_report": "Check again"}, config)
     assert result["recovery_attempts"] == 1
     assert result["recommended_action"] is result["recovery_action"] is result["recovery_result"] is None
-    assert result["final_status"] == "diagnosis_failed"
+    assert result["final_status"] == "unresolved" and result["termination_reason"] == "diagnosis_failed"
     assert get_fault_state(student3_settings.fault_database_path).auth_down
 
 
@@ -237,7 +240,7 @@ def test_local_service_monitoring_to_recovery(
             assert api.get("/profile", headers=headers).status_code == status_code
             def request(request):
                 client = auth if request.url.port == 8002 else api
-                response = client.get(request.url.path)
+                response = client.request(request.method, request.url.path, content=request.content, headers=request.headers)
                 return httpx.Response(response.status_code, json=response.json())
             tools = LocalMonitoringTools(settings, httpx.MockTransport(request))
             result = build_graph(tools).invoke(
@@ -246,10 +249,10 @@ def test_local_service_monitoring_to_recovery(
             assert not result["errors"]
             assert result["recovery_action"] == action and result["recovery_attempts"] == 1
             assert result["recovery_result"].startswith("succeeded:")
-            assert result["final_status"] == "awaiting_verification"
-            assert not result["incident_resolved"] and result["verification_passed"] is None
-            prompt = diagnostic_model.invoke.call_args.args[0]
-            assert str(result["service_status"]) in prompt and str(result["logs"]) in prompt
+            assert result["final_status"] == "resolved"
+            assert result["incident_resolved"] and result["verification_passed"] is True
+            prompt = diagnostic_model.invoke.call_args.args[0][1].content
+            assert "Current service health:" in prompt and str(result["logs"]) in prompt
             assert not any(get_fault_state(settings.fault_database_path).model_dump().values())
             # An independent assertion, not an implementation of Student 4's agent.
             assert api.get("/profile", headers=headers).status_code == 200

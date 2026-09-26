@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IncidentOps — Incident response</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<header><div class="brand"><span class="logo">IO</span><div><strong>IncidentOps</strong><span class="muted">Observe. Diagnose. Recover. Verify.</span></div></div><span class="tag">Local incident lab</span></header>
+<main>
+<section class="intro"><p class="eyebrow">MULTI-AGENT INCIDENT RESPONSE</p><h1>From incident to verified recovery.</h1><p>Follow four specialist agents as they investigate, repair, and independently test your services.</p></section>
+<div class="layout"><section class="panel controls"><h2>Start an investigation</h2>
+<form id="incident-form">
+<label for="mode">Execution mode</label><select id="mode"><option value="demo">Isolated demo · no API key</option><option value="gemini">Local services · Gemini</option></select>
+<p id="mode-note" class="hint">Real service endpoints in isolated storage, with deterministic diagnosis. This does not measure Gemini quality.</p>
+<label for="scenario">Incident scenario</label><select id="scenario"></select>
+<label for="report">Incident report</label><textarea id="report" rows="3" required maxlength="4000">Users cannot log into the application.</textarea>
+<div class="row"><div><label for="retries">Maximum retries</label><input id="retries" type="number" min="0" max="10" value="2" required></div><div><label for="thread">Thread ID (optional)</label><input id="thread" maxlength="80" pattern="[A-Za-z0-9._-]+" placeholder="Generated automatically"></div></div>
+<p class="hint">Two retries allow one initial cycle plus two more. Recovery attempts have a separate limit.</p>
+<button id="run" type="submit">Run investigation <span aria-hidden="true">→</span></button>
+</form><p id="error" role="alert" hidden></p><p id="model" class="hint"></p></section>
+<section class="results" aria-live="polite" aria-busy="false" id="results">
+<div class="panel outcome"><div><p class="eyebrow">WORKFLOW STATUS</p><h2 id="status">Ready to investigate</h2><p id="summary">Choose a scenario and start the workflow.</p></div><span id="badge" class="badge">Ready</span></div>
+<ol class="pipeline" aria-label="Agent workflow"><li data-node="monitor"><b>01</b><strong>Monitoring</strong><span>Collect evidence</span></li><li data-node="diagnose"><b>02</b><strong>Diagnostic</strong><span>Identify cause</span></li><li data-node="recover"><b>03</b><strong>Recovery</strong><span>Apply action</span></li><li data-node="verify"><b>04</b><strong>Verification</strong><span>Test independently</span></li></ol>
+<div class="stats"><div class="panel"><span>Retries</span><strong id="retry-count">—</strong></div><div class="panel"><span>Recovery attempts</span><strong id="attempts">—</strong></div><div class="panel"><span>Elapsed</span><strong id="elapsed">—</strong></div></div>
+<div class="panel" id="detail-panel" hidden><h2>Evidence &amp; outcome</h2><div id="agent-details"></div><h3>Independent verification</h3><ul id="checks" class="checks"></ul><div id="errors"></div></div>
+<div class="panel"><h2>Execution timeline</h2><p class="hint" id="timeline-hint">Each completed step shows its state update, including evidence requests and retries.</p><div id="timeline"></div></div>
+</section></div>
+<footer>Resolution requires independent API, auth, database, login, and profile checks. A successful recovery action alone is never enough.</footer>
+</main><script src="/static/app.js" defer></script></body></html>

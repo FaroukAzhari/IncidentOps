@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from incidentops.state import IncidentState
+from incidentops.schemas.verification import CheckResult
 from incidentops.tools.monitoring_tools import (
     HealthResult,
     LogsResult,
@@ -32,7 +33,7 @@ def make_monitoring_agent(
                 result = schema.model_validate(call())
             except Exception as exc:
                 # Tool-boundary exceptions must not stop the other checks.
-                errors.append(f"{name}: {type(exc).__name__}: {exc}")
+                errors.append(f"{name}: {type(exc).__name__}")
                 return None
 
             if result.error is not None:
@@ -65,7 +66,23 @@ def make_monitoring_agent(
                 else:
                     statuses[service] = result.healthy
 
-        # Collect current logs and metrics.
+        profile = None
+        calls = {f"monitor.{name}": 1 for name in (
+            "api_health", "auth_health", "database_health", "logs", "metrics"
+        )}
+        if hasattr(tools, "probe_profile"):
+            calls["monitor.profile"] = 1
+            try:
+                profile = CheckResult.model_validate(tools.probe_profile())
+                if profile.name != "profile":
+                    raise ValueError("Unexpected check identity")
+                if profile.error:
+                    errors.append(profile.error)
+            except Exception as exc:
+                profile = None
+                errors.append(f"Profile collection failed ({type(exc).__name__}).")
+
+        # Read logs after the functional probe to capture current failure evidence.
         logs = collect(
             "get_application_logs",
             tools.get_application_logs,
@@ -85,6 +102,15 @@ def make_monitoring_agent(
             "monitoring_complete": True,
             "observation_source": tools.observation_source,
             "errors": errors,
+            "collection_errors": errors,
+            "profile_check": profile.model_dump() if profile else None,
+            "evidence_source": "monitoring",
+            "verification_passed": None,
+            "verification_result": None,
+            "incident_resolved": False,
+            "final_status": None,
+            "termination_reason": None,
+            "tool_calls": calls,
         }
 
         # Only a monitoring pass explicitly requested by diagnosis counts as

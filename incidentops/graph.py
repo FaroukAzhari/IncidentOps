@@ -1,5 +1,8 @@
-"""Bounded diagnostic evidence routing; verification retries belong to Student 4."""
+"""Four specialist nodes, bounded evidence requests, and verified retry routing."""
 
+from collections.abc import Callable
+from functools import partial
+import logging
 from typing import Any, Literal
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -10,26 +13,34 @@ from incidentops.agents.diagnostic_agent import diagnose
 from incidentops.agents.monitoring_agent import make_monitoring_agent
 from incidentops.agents.recovery_agent import recover
 from incidentops.agents.verification_agent import verify
+from incidentops.config import Settings
 from incidentops.state import IncidentState
 from incidentops.tools.monitoring_tools import MockMonitoringTools, MonitoringTools
+from incidentops.tools.local_monitoring_tools import LocalMonitoringTools
+from incidentops.tools.verification_tools import LocalVerificationTools, VerificationTools
+
+logger = logging.getLogger(__name__)
 
 
 def finalize(state: IncidentState) -> dict[str, Any]:
-    """Report the stage reached, without claiming the incident was resolved."""
+    """Only independent verification can mark a local incident resolved."""
     if state.observation_source == "simulated":
-        status = "monitoring_only"
+        status, reason = "monitoring_only", "offline_demo"
+    elif state.verification_passed is True:
+        status, reason = "resolved", "verification_passed"
     elif state.needs_more_evidence:
-        status = "evidence_exhausted"
+        status, reason = "unresolved", "evidence_exhausted"
     elif state.suspected_root_cause is None:
-        status = "diagnosis_failed"
-    elif state.recovery_action is not None:
-        status = "awaiting_verification"
+        status, reason = "unresolved", "diagnosis_failed"
+    elif state.recovery_attempts >= state.max_recovery_attempts:
+        status, reason = "unresolved", "recovery_limit"
     else:
-        status = "recovery_skipped"
+        status, reason = "unresolved", "retries_exhausted"
     return {
         "final_status": status,
-        "incident_resolved": False,
-        "execution_history": [f"Execution finished: {status}; incident resolution is not verified."],
+        "termination_reason": reason,
+        "incident_resolved": status == "resolved",
+        "execution_history": [f"Execution finished: {status} ({reason})."],
     }
 
 
@@ -40,23 +51,59 @@ def route_diagnosis(state: IncidentState) -> Literal["monitor", "recover"]:
     return "recover"
 
 
+def route_verification(state: IncidentState) -> Literal["retry", "finalize"]:
+    if (state.observation_source != "local_services" or state.verification_passed is True
+            or state.suspected_root_cause is None or state.needs_more_evidence
+            or state.recovery_attempts >= state.max_recovery_attempts
+            or state.retry_count >= state.max_retries):
+        return "finalize"
+    return "retry"
+
+
+def prepare_retry(state: IncidentState) -> dict[str, Any]:
+    """Exactly one increment per retry; diagnosis consumes fresh verification evidence."""
+    return {
+        "retry_count": state.retry_count + 1, "incident_resolved": False,
+        "execution_history": [f"Retry {state.retry_count + 1}/{state.max_retries}: return to Diagnostic Agent."],
+    }
+
+
+def observed(name: str, node: Callable) -> Callable:
+    def run(state: IncidentState) -> dict[str, Any]:
+        logger.info("%s started (incident=%s)", name, state.incident_id)
+        update = node(state)
+        logger.info("%s completed (incident=%s)", name, state.incident_id)
+        return update
+    return run
+
+
 def build_graph(
     tools: MonitoringTools | None = None,
     checkpointer: MemorySaver | None = None,
+    *,
+    settings: Settings | None = None,
+    verification_tools: VerificationTools | None = None,
+    diagnostic_node: Callable | None = None,
+    recovery_node: Callable | None = None,
 ) -> CompiledStateGraph:
     """Reuse the returned graph to inspect checkpoints within the same process."""
+    settings = settings or getattr(tools, "settings", None)
+    if verification_tools is None and isinstance(tools, LocalMonitoringTools):
+        verification_tools = LocalVerificationTools(settings, tools.transport)
+    diagnosis = diagnostic_node or (partial(diagnose, settings=settings) if settings else diagnose)
+    recovery = recovery_node or (partial(recover, fault_database_path=settings.fault_database_path) if settings else recover)
     builder = StateGraph(IncidentState)
-    builder.add_node("monitor", make_monitoring_agent(tools if tools is not None else MockMonitoringTools()))
-    builder.add_node("diagnose", diagnose)
-    builder.add_node("recover", recover)
-    builder.add_node("verify", verify)
+    builder.add_node("monitor", observed("Monitoring Agent", make_monitoring_agent(tools if tools is not None else MockMonitoringTools())))
+    builder.add_node("diagnose", observed("Diagnostic Agent", diagnosis))
+    builder.add_node("recover", observed("Recovery Agent", recovery))
+    builder.add_node("verify", observed("Verification Agent", partial(verify, tools=verification_tools)))
+    builder.add_node("retry", prepare_retry)
     builder.add_node("finalize", finalize)
     builder.add_edge(START, "monitor")
     builder.add_edge("monitor", "diagnose")
     builder.add_conditional_edges("diagnose", route_diagnosis)
     builder.add_edge("recover", "verify")
-    # Student 4: route pass to finalize, failed retries to diagnose, exhaustion to finalize.
-    # Replace finalize's provisional statuses when implementing those real outcomes.
-    builder.add_edge("verify", "finalize")
+    builder.add_conditional_edges("verify", route_verification)
+    builder.add_edge("retry", "diagnose")
     builder.add_edge("finalize", END)
     return builder.compile(checkpointer=checkpointer if checkpointer is not None else MemorySaver())

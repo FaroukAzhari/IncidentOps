@@ -13,6 +13,8 @@ class Settings(BaseModel):
     gemini_api_key: SecretStr = SecretStr("")
     llm_model: str = "gemini-3.5-flash-lite"
     max_recovery_attempts: int = Field(default=3, gt=0)
+    max_retries: int = Field(default=2, ge=0, le=10)
+    llm_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     api_url: str = "http://localhost:8001"
     auth_url: str = "http://localhost:8002"
     database_path: Path = PROJECT_ROOT / "data" / "incidentops.db"
@@ -27,6 +29,8 @@ def load_settings(env_file: Path | None = None) -> Settings:
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         llm_model=os.getenv("LLM_MODEL", "gemini-3.5-flash-lite"),
         max_recovery_attempts=os.getenv("INCIDENTOPS_MAX_RECOVERY_ATTEMPTS", "3"),
+        max_retries=os.getenv("INCIDENTOPS_MAX_RETRIES", "2"),
+        llm_timeout_seconds=os.getenv("INCIDENTOPS_LLM_TIMEOUT_SECONDS", "30"),
         api_url=os.getenv("INCIDENTOPS_API_URL", "http://localhost:8001"),
         auth_url=os.getenv("INCIDENTOPS_AUTH_URL", "http://localhost:8002"),
         database_path=PROJECT_ROOT / Path(os.getenv("INCIDENTOPS_DATABASE_PATH", "data/incidentops.db")),
