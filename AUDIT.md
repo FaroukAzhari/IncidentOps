@@ -1,5 +1,35 @@
 # IncidentOps final integration audit
 
+## Application story UI update (2026-09-26)
+
+Added the simulated Employee Portal, snapshot-driven agent summaries and tool
+counts, topology, before/after observations, explicit retry cycles, optional
+800 ms recorded playback, and completed-incident retrieval. Kept the existing
+live stream. Restoration is gated on the actual final resolved/verified state.
+Replaced corrupted JavaScript punctuation with ASCII-safe escapes/entities.
+
+No backend, model, graph, schema, evaluation, or existing-test changes were made
+in this task (compared with the task-start Python file hashes). Validation:
+141 tests passed, including new frontend rule tests against seven real API traces;
+JavaScript syntax and pip checks passed. A manual visual/browser-console pass
+remains unavailable because no browser is connected to the computer-use tools.
+See [docs/demo-story.md](docs/demo-story.md) for launch and presentation instructions.
+
+## Live activity update (2026-09-26)
+
+The historical audit below predates the live view. The UI now consumes
+`POST /api/incidents/stream`: real node/tool start events, observed results,
+per-step snapshots, retries, and final output arrive during execution. The
+original JSON endpoint remains supported. Run locks remain held if a browser
+disconnects; results remain retrievable after the worker completes.
+
+Validation: **139 tests passed**, including a real-socket test that receives
+events while the workflow is blocked, concurrent-start rejection after disconnect,
+sanitized streaming errors, and streamed-result/GET consistency. JavaScript syntax
+validation passed. A running-backend demo emitted 56 events and resolved after
+one retry. A new visual browser check was unavailable in this session; earlier
+browser results below do not validate the changed interface.
+
 ## Baseline (before changes)
 
 - Base commit: `28077d7`; Python 3.12.14: **88 passed, 0 failed**.

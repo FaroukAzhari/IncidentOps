@@ -5,6 +5,7 @@ from typing import Any
 from incidentops.config import load_settings
 from incidentops.schemas.verification import CheckResult, VerificationResult
 from incidentops.state import IncidentState
+from incidentops.progress import emit
 from incidentops.tools.verification_tools import LocalVerificationTools, VerificationTools
 
 
@@ -18,6 +19,7 @@ def verify(state: IncidentState, *, tools: VerificationTools | None = None) -> d
     checks: list[CheckResult] = []
     errors: list[str] = []
     for name in ("api_health", "auth_health", "database_health", "login", "profile"):
+        emit("tool_started", tool=name)
         try:
             result = CheckResult.model_validate(getattr(tools, f"check_{name}")())
             if result.name != name:
@@ -28,6 +30,7 @@ def verify(state: IncidentState, *, tools: VerificationTools | None = None) -> d
         if result.error:
             errors.append(result.error)
         checks.append(result)
+        emit("tool_completed", tool=name, result=result.model_dump(mode="json"))
     failures = [check.name for check in checks if not check.passed or check.error]
     verified = not failures
     result = VerificationResult(

@@ -10,6 +10,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from incidentops.agents.recovery_agent import recover
 from incidentops.config import Settings
+from incidentops.progress import EventSink
 from incidentops.demo import SCENARIOS, blocked_recovery, demo_diagnose, isolated_services
 from incidentops.graph import build_graph
 from incidentops.schemas.api import IncidentRequest, IncidentResponse, Step
@@ -34,7 +35,8 @@ def apply_update(state: IncidentState, update: dict) -> IncidentState:
     return IncidentState.model_validate(values)
 
 
-def run_graph(graph, initial: IncidentState, thread_id: str, mode: str, scenario: str | None) -> IncidentResponse:
+def run_graph(graph, initial: IncidentState, thread_id: str, mode: str, scenario: str | None,
+              *, on_event: EventSink | None = None) -> IncidentResponse:
     # Graph steps are explicitly bounded; scale LangGraph's independent safety cap
     # above the maximum expected number of bounded cycles.
     config = {"configurable": {"thread_id": thread_id},
@@ -52,6 +54,8 @@ def run_graph(graph, initial: IncidentState, thread_id: str, mode: str, scenario
                 # JSON serialization is also the API boundary validation.
                 step = Step(node=node, elapsed_ms=round((now - last) * 1000, 3), update=update, state=current)
                 steps.append(Step.model_validate_json(step.model_dump_json()))
+                if on_event is not None:
+                    on_event({"event": "step_completed", "step": steps[-1].model_dump(mode="json")})
                 last = now
         current = IncidentState.model_validate(graph.get_state(config).values)
     except Exception as exc:
@@ -75,7 +79,8 @@ def run_graph(graph, initial: IncidentState, thread_id: str, mode: str, scenario
 
 
 def run_incident(request: IncidentRequest, settings: Settings,
-                 checkpointer: MemorySaver | None = None, *, diagnostic_node=None) -> IncidentResponse:
+                 checkpointer: MemorySaver | None = None, *, diagnostic_node=None,
+                 on_event: EventSink | None = None) -> IncidentResponse:
     thread_id = request.thread_id or str(uuid4())
     initial = IncidentState(incident_id=thread_id, user_report=request.report,
                             max_retries=settings.max_retries if request.max_retries is None else request.max_retries,
@@ -85,7 +90,9 @@ def run_incident(request: IncidentRequest, settings: Settings,
             with isolated_services(Path(directory), SCENARIOS[request.scenario][1]) as (local, monitor, verifier):
                 recovery = partial(recover, executor=blocked_recovery) if request.scenario == "persistent_auth" else None
                 graph = build_graph(monitor, checkpointer, settings=local, verification_tools=verifier,
-                                    diagnostic_node=diagnostic_node or demo_diagnose, recovery_node=recovery)
-                return run_graph(graph, initial, thread_id, "demo", request.scenario)
-    graph = build_graph(LocalMonitoringTools(settings), checkpointer, settings=settings, diagnostic_node=diagnostic_node)
-    return run_graph(graph, initial, thread_id, "gemini", None)
+                                    diagnostic_node=diagnostic_node or demo_diagnose, recovery_node=recovery,
+                                    on_event=on_event)
+                return run_graph(graph, initial, thread_id, "demo", request.scenario, on_event=on_event)
+    graph = build_graph(LocalMonitoringTools(settings), checkpointer, settings=settings,
+                        diagnostic_node=diagnostic_node, on_event=on_event)
+    return run_graph(graph, initial, thread_id, "gemini", None, on_event=on_event)

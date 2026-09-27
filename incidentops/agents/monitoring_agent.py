@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from incidentops.state import IncidentState
+from incidentops.progress import emit
 from incidentops.schemas.verification import CheckResult
 from incidentops.tools.monitoring_tools import (
     HealthResult,
@@ -29,13 +30,16 @@ def make_monitoring_agent(
             call: Callable[[], T],
             schema: type[T],
         ) -> T | None:
+            emit("tool_started", tool=name)
             try:
                 result = schema.model_validate(call())
             except Exception as exc:
                 # Tool-boundary exceptions must not stop the other checks.
                 errors.append(f"{name}: {type(exc).__name__}")
+                emit("tool_completed", tool=name, result={"error": errors[-1]})
                 return None
 
+            emit("tool_completed", tool=name, result=result.model_dump(mode="json"))
             if result.error is not None:
                 errors.append(f"{name}: {result.error}")
                 return None
@@ -71,6 +75,7 @@ def make_monitoring_agent(
             "api_health", "auth_health", "database_health", "logs", "metrics"
         )}
         if hasattr(tools, "probe_profile"):
+            emit("tool_started", tool="profile")
             calls["monitor.profile"] = 1
             try:
                 profile = CheckResult.model_validate(tools.probe_profile())
@@ -81,6 +86,7 @@ def make_monitoring_agent(
             except Exception as exc:
                 profile = None
                 errors.append(f"Profile collection failed ({type(exc).__name__}).")
+            emit("tool_completed", tool="profile", result=profile.model_dump(mode="json") if profile else {"error": errors[-1]})
 
         # Read logs after the functional probe to capture current failure evidence.
         logs = collect(

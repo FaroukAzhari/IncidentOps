@@ -7,6 +7,7 @@ from incidentops.api import create_app
 from incidentops.config import Settings
 from incidentops.schemas.api import IncidentRequest
 from incidentops.workflow import run_incident
+from incidentops.demo import isolated_services
 
 
 def test_api_ui_and_checkpoint_retrieval():
@@ -63,6 +64,23 @@ def test_concurrent_workflows_are_rejected_without_blocking_read_routes():
             assert entered.wait(5)
             assert client.get("/api/config").status_code == 200
             assert client.post("/api/incidents", json={"report":"two"}).status_code == 409
+            assert client.post("/api/lab/faults", json={"fault":"auth_down"}).status_code == 409
         finally:
             release.set()
         assert future.result().status_code == 200
+
+
+def test_manual_fault_changes_real_portal_probe_without_an_incident(tmp_path):
+    with isolated_services(tmp_path) as (settings, monitor, _):
+        with TestClient(create_app(settings, portal_transport=monitor.transport)) as client:
+            healthy = client.get('/api/lab/portal').json()
+            assert healthy['ready'] and healthy['login']['passed'] and healthy['profile']['passed']
+            assert client.post('/api/lab/faults', json={'fault': 'nonsense'}).status_code == 422
+            for fault, login_ok in [('auth_down', False), ('database_down', True),
+                                    ('api_degraded', True), ('wrong_db_config', True)]:
+                assert client.post('/api/lab/reset').json()['ready']
+                failed = client.post('/api/lab/faults', json={'fault': fault}).json()
+                assert not failed['ready'] and failed['login']['passed'] is login_ok
+                assert failed['faults'][fault]
+                assert not client.get('/api/lab/portal').json()['ready']
+            assert client.post('/api/lab/reset').json()['ready']

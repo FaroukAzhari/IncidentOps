@@ -75,11 +75,25 @@ python -m environment.fault_controller status
 ```
 
 Alternatively select **Local services · Gemini** in the UI. This mode observes and
-repairs the configured running services; the scenario dropdown is disabled and no
+repairs the configured running services; the demo scenario dropdown is hidden and no
 fault is injected by the workflow. Faults can be reset explicitly with
 `python -m environment.fault_controller reset`. All processes must share the same
 `.env`/database paths. Services observe persistent flag changes without restart.
 Restart services after code changes.
+
+For the visible fault-to-recovery demo, first select **Local services | Gemini**.
+The Employee Portal makes a fresh fixed-identity sign-in and profile probe, so a
+healthy environment shows a working profile. Select a supported fault in **Controlled
+fault lab** and click **Trigger fault**. The portal then shows the actual failure.
+Write a symptom report and run the investigation. Monitoring and Verification make
+their own fresh requests; the agents do not receive the selected fault flag as
+evidence. After the run, the portal probes again, while the workflow verdict comes
+from independent Verification. Click **Clear faults** to return the lab to healthy.
+Fault changes are rejected during an investigation to keep its evidence stable.
+The portal uses the fixed `demo-token` identity; its password display is decorative
+and accepts no personal credentials. Local service probes require ports 8001/8002
+and the initialized database; an unreachable service is shown as a failure, not a
+healthy portal. The incident report describes the problem and never triggers a fault.
 
 Missing keys, invalid structured output, model errors, and unknown observations
 cannot authorize recovery. Errors are recorded and previous actionable diagnosis
@@ -226,6 +240,9 @@ transport errors publish fixed messages or exception types, not raw bodies/keys.
 - `POST /api/incidents` accepts a validated report, mode, scenario, optional thread
   ID, and optional retry limit. It returns final state plus per-step snapshots and
   measured elapsed times.
+- `POST /api/incidents/stream` accepts the same body and streams newline-delimited
+  JSON events as work happens. The UI uses this endpoint; the original JSON endpoint
+  remains compatible with existing clients.
 - `GET /api/incidents/{thread_id}` reads a completed incident without rerunning it.
 - `/docs` exposes the OpenAPI schema.
 
@@ -243,8 +260,51 @@ process loses in-memory history; checkpointing is not durable database persisten
 Run **one Uvicorn worker on loopback**. Workflows are serialized because live runs
 share a fault store; a concurrent start receives HTTP 409, while read routes remain
 available. This local course demo has no authentication/multi-tenant isolation and
-is not intended for public deployment. The UI shows a running indicator and renders
-the complete execution timeline when the synchronous request finishes.
+is not intended for public deployment.
+
+The UI shows the active agent, individual monitoring/verification checks, the
+structured diagnosis request, the chosen recovery action, observed tool results,
+retry transitions, and each completed node's state update **during execution**.
+Its elapsed-time counter runs while waiting for Gemini or I/O. This is operational
+progress and validated output, not an LLM's private reasoning or simulated typing.
+Fast offline demos may finish almost immediately; live execution has no artificial
+delay. The optional **Presentation walkthrough after execution** then replays the
+returned snapshots at 800 ms per step, explicitly labeled as recorded playback.
+Its timer shows the original execution time, not animation time. Use **Show final
+result** to skip playback or **Replay recorded investigation** to repeat it without
+rerunning tools or calling Gemini. Reduced-motion preferences disable automatic
+walkthrough by default.
+
+The simulated Employee Portal tells the application-side story. Before an isolated
+demo run, it is explicitly labeled as a scenario preview. In local Gemini mode it
+shows a live fixed-identity probe before and after manual fault changes and again
+after the workflow. A working portal is a user-facing observation; only a final
+`resolved` state with `incident_resolved` and `verification_passed` both true is
+reported as an agent-verified resolution. Agent cards display observed results and actual
+tool-call deltas; the topology uses monitoring/verification evidence. The before/
+after table compares the first monitoring snapshot with independent verification,
+with unobserved checks labeled honestly (Monitoring does not separately test login).
+Retry cycles are built from actual steps, not a hardcoded repair order.
+
+Use **Retrieve a completed incident** for a read-only lookup in this backend
+process. The detailed timeline retains both partial updates and full snapshots.
+See [the presentation guide](docs/demo-story.md) for the two recommended demos.
+
+Stream events are `run_started`, `node_started`, `tool_started`, `tool_completed`,
+`step_completed`, and `run_completed` (or a sanitized `run_failed`). Heartbeats keep
+an idle stream active. Operational events contain node/tool identifiers and results;
+completed steps contain the same validated snapshots as the original API. The
+terminal event contains the full IncidentResponse, also available through GET.
+Activity callbacks are separate from checkpoint state, so CLI and evaluation
+behavior is unchanged. A disconnected browser does not cancel recovery or release
+the run lock; the worker finishes and retains the result for GET lookup.
+
+The fault-scenario selector is shown only in isolated demo mode, where it creates
+faults in temporary test services. Gemini mode uses the current local environment.
+An incident report describes symptoms; it does not create a fault or override tool
+evidence. To demonstrate a live auth fault, inject it first with
+`python -m environment.fault_controller inject auth_down`, then investigate using
+Gemini mode. A healthy environment can correctly finish without a repair.
 
 ## Tests and evaluation
 

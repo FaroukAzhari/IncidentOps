@@ -5,6 +5,7 @@ from pathlib import Path
 from collections.abc import Callable
 
 from incidentops.state import IncidentState
+from incidentops.progress import emit
 from incidentops.tools.recovery_tools import RECOVERY_ACTIONS, execute_recovery_action
 from incidentops.schemas.recovery import RecoveryResult
 
@@ -74,6 +75,7 @@ def recover(state: IncidentState, *, fault_database_path: Path | None = None,
         }
 
     # A real allowlisted recovery action is attempted only after all checks pass.
+    emit("tool_started", tool=recommended_action)
     try:
         result = RecoveryResult.model_validate((executor or execute_recovery_action)(
             recommended_action, fault_database_path=fault_database_path,
@@ -85,6 +87,7 @@ def recover(state: IncidentState, *, fault_database_path: Path | None = None,
                                 details=f"Recovery failed ({type(exc).__name__}).")
 
     new_attempt_count = state.recovery_attempts + 1
+    emit("tool_completed", tool=recommended_action, result=result.model_dump(mode="json"))
 
     outcome = "succeeded" if result.succeeded else "failed"
 

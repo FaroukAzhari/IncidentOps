@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from incidentops.config import Settings, load_settings
 from incidentops.schemas.diagnosis import Diagnosis
 from incidentops.state import IncidentState
+from incidentops.progress import emit
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "diagnostic.txt"
@@ -94,9 +95,12 @@ def diagnose(state: IncidentState, *, settings: Settings | None = None) -> dict[
         prompt = _load_prompt()
         evidence = _build_evidence(state)
         calls = {"diagnose.llm": 1}
+        emit("tool_started", tool="structured_diagnosis")
         diagnosis = structured_llm.invoke([SystemMessage(content=prompt), HumanMessage(content=evidence)])
         diagnosis = Diagnosis.model_validate(diagnosis)
+        emit("tool_completed", tool="structured_diagnosis", result=diagnosis.model_dump(mode="json"))
     except Exception as exc:
+        emit("tool_completed", tool="structured_diagnosis", result={"error": f"Diagnosis failed ({type(exc).__name__})."})
         return {
             **cleared,
             "tool_calls": calls,

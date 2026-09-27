@@ -14,6 +14,7 @@ from incidentops.agents.monitoring_agent import make_monitoring_agent
 from incidentops.agents.recovery_agent import recover
 from incidentops.agents.verification_agent import verify
 from incidentops.config import Settings
+from incidentops.progress import EventSink, active_node, emit, sink
 from incidentops.state import IncidentState
 from incidentops.tools.monitoring_tools import MockMonitoringTools, MonitoringTools
 from incidentops.tools.local_monitoring_tools import LocalMonitoringTools
@@ -68,10 +69,19 @@ def prepare_retry(state: IncidentState) -> dict[str, Any]:
     }
 
 
-def observed(name: str, node: Callable) -> Callable:
+def observed(name: str, node: Callable, node_id: str, on_event: EventSink | None) -> Callable:
     def run(state: IncidentState) -> dict[str, Any]:
         logger.info("%s started (incident=%s)", name, state.incident_id)
-        update = node(state)
+        token = sink.set(on_event)
+        node_token = active_node.set(node_id)
+        try:
+            emit("node_started", retry_count=state.retry_count,
+                 recovery_attempts=state.recovery_attempts,
+                 requested_evidence=state.requested_evidence)
+            update = node(state)
+        finally:
+            active_node.reset(node_token)
+            sink.reset(token)
         logger.info("%s completed (incident=%s)", name, state.incident_id)
         return update
     return run
@@ -85,6 +95,7 @@ def build_graph(
     verification_tools: VerificationTools | None = None,
     diagnostic_node: Callable | None = None,
     recovery_node: Callable | None = None,
+    on_event: EventSink | None = None,
 ) -> CompiledStateGraph:
     """Reuse the returned graph to inspect checkpoints within the same process."""
     settings = settings or getattr(tools, "settings", None)
@@ -93,12 +104,12 @@ def build_graph(
     diagnosis = diagnostic_node or (partial(diagnose, settings=settings) if settings else diagnose)
     recovery = recovery_node or (partial(recover, fault_database_path=settings.fault_database_path) if settings else recover)
     builder = StateGraph(IncidentState)
-    builder.add_node("monitor", observed("Monitoring Agent", make_monitoring_agent(tools if tools is not None else MockMonitoringTools())))
-    builder.add_node("diagnose", observed("Diagnostic Agent", diagnosis))
-    builder.add_node("recover", observed("Recovery Agent", recovery))
-    builder.add_node("verify", observed("Verification Agent", partial(verify, tools=verification_tools)))
-    builder.add_node("retry", prepare_retry)
-    builder.add_node("finalize", finalize)
+    builder.add_node("monitor", observed("Monitoring Agent", make_monitoring_agent(tools if tools is not None else MockMonitoringTools()), "monitor", on_event))
+    builder.add_node("diagnose", observed("Diagnostic Agent", diagnosis, "diagnose", on_event))
+    builder.add_node("recover", observed("Recovery Agent", recovery, "recover", on_event))
+    builder.add_node("verify", observed("Verification Agent", partial(verify, tools=verification_tools), "verify", on_event))
+    builder.add_node("retry", observed("Retry", prepare_retry, "retry", on_event))
+    builder.add_node("finalize", observed("Finalize", finalize, "finalize", on_event))
     builder.add_edge(START, "monitor")
     builder.add_edge("monitor", "diagnose")
     builder.add_conditional_edges("diagnose", route_diagnosis)

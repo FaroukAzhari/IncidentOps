@@ -1,27 +1,51 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>IncidentOps — Incident response</title><link rel="stylesheet" href="/static/style.css"></head>
+<title>IncidentOps | Incident response lab</title><link rel="stylesheet" href="/static/style.css?v=story1"></head>
 <body>
-<header><div class="brand"><span class="logo">IO</span><div><strong>IncidentOps</strong><span class="muted">Observe. Diagnose. Recover. Verify.</span></div></div><span class="tag">Local incident lab</span></header>
+<header><a class="brand" href="/"><span class="logo">IO</span><span><strong>IncidentOps</strong><small>Observe. Diagnose. Recover. Verify.</small></span></a><span id="header-mode" class="tag">Local incident lab</span></header>
 <main>
-<section class="intro"><p class="eyebrow">MULTI-AGENT INCIDENT RESPONSE</p><h1>From incident to verified recovery.</h1><p>Follow four specialist agents as they investigate, repair, and independently test your services.</p></section>
-<div class="layout"><section class="panel controls"><h2>Start an investigation</h2>
+<section class="intro"><p class="eyebrow">FOUR SPECIALISTS. ONE VERIFIED OUTCOME.</p><h1>From application failure to recovery.</h1><p>See the problem, follow the evidence, and watch independent checks decide the outcome.</p></section>
+<ol class="story-strip" aria-label="Incident response story"><li id="story-problem" class="active"><b>1</b> Application problem</li><li id="story-report"><b>2</b> Incident reported</li><li id="story-investigation"><b>3</b> Agents investigate</li><li id="story-outcome"><b>4</b> Verified outcome</li></ol>
+<div class="layout">
+<div class="left-column">
+<section class="portal panel" aria-labelledby="portal-heading"><div class="section-heading"><h2 id="portal-heading">Simulated User Application</h2><span id="portal-source" class="tag">Scenario preview</span></div>
+<div class="browser-window"><div class="browser-bar"><span aria-hidden="true" class="browser-dots">&#9679; &#9679; &#9679;</span><span>demo-app.local / employee</span><span aria-hidden="true">&#128274;</span></div>
+<div class="portal-body" id="portal-body"><div class="portal-logo" aria-hidden="true">EP</div><p class="eyebrow">EMPLOYEE PORTAL</p><h3 id="portal-title">Sign-in unavailable</h3>
+<div id="portal-login"><div class="portal-label">Username</div><div class="portal-field">demo</div><div class="portal-label">Password <small>(fixed demo identity)</small></div><div class="portal-field" aria-label="Illustrated password">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</div><button class="portal-signin" id="portal-check" type="button">Try sign in</button></div>
+<div id="portal-profile" hidden><div class="avatar">DU</div><h3>Welcome, Demo User</h3><p>Profile loaded successfully.</p><div class="profile-row"><span>Account</span><strong>demo</strong></div><div class="profile-row"><span>Workspace</span><strong>Employee portal</strong></div></div>
+<p id="portal-message" role="status">Authentication service unavailable.</p></div></div>
+<p id="portal-caption" class="hint">The local mode probes the running services with a fixed demo identity.</p><div id="fault-lab" hidden><p class="eyebrow">CONTROLLED FAULT LAB</p><label for="fault-choice">Trigger a fault</label><select id="fault-choice"><option value="auth_down">Authentication unavailable</option><option value="database_down">Database unavailable</option><option value="api_degraded">API degraded</option><option value="wrong_db_config">Wrong database configuration</option></select><div class="lab-actions"><button id="inject-fault" type="button">Trigger fault</button><button id="clear-faults" type="button" class="secondary">Clear faults</button></div><p id="lab-status" class="hint" role="status">Faults are changed only when you use these controls.</p></div></section>
+<section class="panel controls"><p class="eyebrow">REPORT THE SYMPTOMS</p><h2>Start an investigation</h2>
 <form id="incident-form">
-<label for="mode">Execution mode</label><select id="mode"><option value="demo">Isolated demo · no API key</option><option value="gemini">Local services · Gemini</option></select>
-<p id="mode-note" class="hint">Real service endpoints in isolated storage, with deterministic diagnosis. This does not measure Gemini quality.</p>
-<label for="scenario">Incident scenario</label><select id="scenario"></select>
-<label for="report">Incident report</label><textarea id="report" rows="3" required maxlength="4000">Users cannot log into the application.</textarea>
-<div class="row"><div><label for="retries">Maximum retries</label><input id="retries" type="number" min="0" max="10" value="2" required></div><div><label for="thread">Thread ID (optional)</label><input id="thread" maxlength="80" pattern="[A-Za-z0-9._-]+" placeholder="Generated automatically"></div></div>
-<p class="hint">Two retries allow one initial cycle plus two more. Recovery attempts have a separate limit.</p>
-<button id="run" type="submit">Run investigation <span aria-hidden="true">→</span></button>
+<label for="mode">Execution mode</label><select id="mode"><option value="demo">Isolated demo | no API key</option><option value="gemini">Local services | Gemini</option></select><p id="mode-note" class="hint"></p>
+<div id="scenario-control"><label for="scenario">Demo fault scenario</label><select id="scenario"></select></div>
+<p id="live-environment-note" class="hint" hidden>Uses the current local environment. A report does not inject a fault.</p>
+<label for="report">Incident report</label><textarea id="report" rows="3" required maxlength="4000">Users cannot log into the application.</textarea><p class="hint">Your report is considered alongside observed health, logs, metrics, and functional checks.</p>
+<div class="row"><div><label for="retries">Maximum retries</label><input id="retries" type="number" min="0" max="10" value="2" required></div><div><label for="thread">Thread ID (optional)</label><input id="thread" maxlength="80" pattern="[A-Za-z0-9._-]+" placeholder="Generated automatically"></div></div><p class="hint">One initial cycle, then up to this many retries. Recovery actions have a separate limit.</p>
+<label class="checkbox-label"><input id="auto-replay" type="checkbox" checked> Presentation walkthrough after execution</label><p class="hint">Replays recorded snapshots at 800 ms per step. No extra requests or repairs.</p>
+<button id="run" type="submit">Run investigation &#8594;</button>
 </form><p id="error" role="alert" hidden></p><p id="model" class="hint"></p></section>
-<section class="results" aria-live="polite" aria-busy="false" id="results">
-<div class="panel outcome"><div><p class="eyebrow">WORKFLOW STATUS</p><h2 id="status">Ready to investigate</h2><p id="summary">Choose a scenario and start the workflow.</p></div><span id="badge" class="badge">Ready</span></div>
-<ol class="pipeline" aria-label="Agent workflow"><li data-node="monitor"><b>01</b><strong>Monitoring</strong><span>Collect evidence</span></li><li data-node="diagnose"><b>02</b><strong>Diagnostic</strong><span>Identify cause</span></li><li data-node="recover"><b>03</b><strong>Recovery</strong><span>Apply action</span></li><li data-node="verify"><b>04</b><strong>Verification</strong><span>Test independently</span></li></ol>
-<div class="stats"><div class="panel"><span>Retries</span><strong id="retry-count">—</strong></div><div class="panel"><span>Recovery attempts</span><strong id="attempts">—</strong></div><div class="panel"><span>Elapsed</span><strong id="elapsed">—</strong></div></div>
-<div class="panel" id="detail-panel" hidden><h2>Evidence &amp; outcome</h2><div id="agent-details"></div><h3>Independent verification</h3><ul id="checks" class="checks"></ul><div id="errors"></div></div>
-<div class="panel"><h2>Execution timeline</h2><p class="hint" id="timeline-hint">Each completed step shows its state update, including evidence requests and retries.</p><div id="timeline"></div></div>
-</section></div>
-<footer>Resolution requires independent API, auth, database, login, and profile checks. A successful recovery action alone is never enough.</footer>
-</main><script src="/static/app.js" defer></script></body></html>
+</div>
+<section class="results" id="results" aria-label="IncidentOps investigation">
+<div class="panel outcome"><div><p class="eyebrow">INCIDENTOPS WORKFLOW</p><h2 id="status" role="status">Ready to investigate</h2><p id="summary">Select a fault scenario and report the symptoms.</p></div><span id="badge" class="badge">Ready</span></div>
+<div id="playback-bar" class="playback-bar" hidden><span id="playback-note" role="status"></span><button id="skip-replay" type="button" class="secondary">Show final result</button></div>
+<div class="stats"><div class="panel"><span>Retries</span><strong id="retry-count">&mdash;</strong></div><div class="panel"><span>Recovery attempts</span><strong id="attempts">&mdash;</strong></div><div class="panel"><span id="elapsed-label">Execution time</span><strong id="elapsed">&mdash;</strong></div></div>
+<div class="agent-grid" aria-label="Four specialist agents">
+<article class="agent-card" data-node="monitor"><div class="agent-heading"><b>01</b><h3>Monitoring</h3><span class="agent-state">Waiting</span></div><p class="agent-role">Observe services and collect factual evidence.</p><div class="agent-result" id="result-monitor"><p class="hint">API, auth, database, profile, logs, and metrics.</p></div><div class="agent-tools" id="tools-monitor"></div></article>
+<article class="agent-card" data-node="diagnose"><div class="agent-heading"><b>02</b><h3>Diagnostic</h3><span class="agent-state">Waiting</span></div><p class="agent-role" id="diagnostic-role">Structured diagnosis from collected evidence.</p><div class="agent-result" id="result-diagnose"><p class="hint">Cause, confidence, evidence, and recommendation.</p></div><div class="agent-tools" id="tools-diagnose"></div></article>
+<article class="agent-card" data-node="recover"><div class="agent-heading"><b>03</b><h3>Recovery</h3><span class="agent-state">Waiting</span></div><p class="agent-role">Apply one allowlisted application-layer repair.</p><div class="agent-result" id="result-recover"><p class="hint">No unrestricted shell or OS process restart.</p></div><div class="agent-tools" id="tools-recover"></div></article>
+<article class="agent-card" data-node="verify"><div class="agent-heading"><b>04</b><h3>Verification</h3><span class="agent-state">Waiting</span></div><p class="agent-role">Independently check the result with fresh I/O.</p><div class="agent-result" id="result-verify"><p class="hint">API, auth, database, login, and profile must pass.</p></div><div class="agent-tools" id="tools-verify"></div></article>
+</div>
+<div class="panel" id="cycles-panel" hidden><p class="eyebrow">CONDITIONAL RECOVERY LOOP</p><h2>Verification failed. Investigate again.</h2><div id="cycles"></div></div>
+<div class="panel activity-panel"><p class="eyebrow" id="activity-kind">LIVE AGENT ACTIVITY</p><h2 id="activity-title">Waiting for an investigation</h2><p class="hint" id="activity-description">Actual checks and their results appear as they run.</p><ul id="active-tasks" class="checks"></ul><details id="tool-feed-details"><summary>Tool event details</summary><div id="activity-feed" role="log" aria-label="Operational activity"></div></details></div>
+<div id="final-outcome" class="panel final-outcome" hidden><h2 id="final-title"></h2><p id="final-description"></p><button id="replay" class="secondary" type="button">Replay recorded investigation</button></div>
+<div id="errors" role="status"></div>
+</section>
+</div>
+<section class="panel system-section"><div><p class="eyebrow">OBSERVE THE CHANGE</p><h2>System topology</h2><p class="hint" id="topology-note">Waiting for actual service observations.</p><div class="topology-root">IncidentOps</div><div id="topology" class="topology-nodes"></div></div>
+<div><h2>Before &rarr; after</h2><p id="comparison-note" class="hint">First monitoring snapshot compared with independent verification. Unknown is never treated as healthy.</p><table class="comparison"><thead><tr><th scope="col">Check</th><th scope="col">Before</th><th scope="col" id="after-heading">After verification</th></tr></thead><tbody id="comparison"></tbody></table></div></section>
+<details class="panel technical" id="technical"><summary>Execution timeline &amp; state details</summary><p class="hint">Actual node timings, partial updates, and full snapshots. Playback does not alter these records.</p><div id="timeline"></div><details><summary>Execution history</summary><ol id="execution-history"></ol></details></details>
+<section class="panel retrieve"><label for="retrieve-thread">Retrieve a completed incident</label><div class="retrieve-row"><input id="retrieve-thread" maxlength="80" placeholder="Thread ID in this server process"><button id="retrieve" type="button" class="secondary">Load result</button></div><p id="retrieve-message" class="hint" role="status">Read-only lookup. Does not rerun agents or call Gemini.</p></section>
+<footer>Local course demonstration. Recovery clears controlled fault flags. Only independent verification can confirm resolution. Portal visuals are illustrative; no real credentials are entered here.</footer>
+</main><script src="/static/presentation.js?v=story1" defer></script><script src="/static/story.js?v=story1" defer></script><script src="/static/app.js?v=story1" defer></script></body></html>
