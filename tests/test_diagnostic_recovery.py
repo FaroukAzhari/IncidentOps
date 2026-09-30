@@ -4,6 +4,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from langchain_core.exceptions import OutputParserException
 
 from environment.app_service.main import create_app
 from environment.auth_service.main import create_app as create_auth
@@ -54,7 +55,7 @@ def test_structured_diagnosis_uses_evidence_and_configured_model(diagnostic_mode
     diagnostic_agent.ChatGoogleGenerativeAI.assert_called_once_with(
         model="gemini-3.5-flash-lite", google_api_key="offline-test-key", timeout=30.0, max_retries=0,
     )
-    diagnostic_model.with_structured_output.assert_called_once_with(Diagnosis)
+    diagnostic_model.with_structured_output.assert_called_once_with(Diagnosis, method="json_schema")
     prompt = diagnostic_model.invoke.call_args.args[0][1].content
     for value in (initial.user_report, str(initial.service_status), str(initial.logs), str(initial.metrics)):
         assert value in prompt
@@ -94,6 +95,26 @@ def test_invalid_evidence_requests_are_rejected(evidence_request, needed):
     data.update(requested_evidence=evidence_request, needs_more_evidence=needed)
     with pytest.raises(ValidationError):
         Diagnosis.model_validate(data)
+
+
+def test_parser_failure_retries_once_then_accepts_valid_model_decision(diagnostic_model):
+    diagnostic_model.invoke.side_effect = [OutputParserException("untrusted output"),
+                                          diagnosis(action="reset_application_state")]
+    update = diagnostic_agent.diagnose(state())
+    assert update["recommended_action"] == "reset_application_state"
+    assert update["tool_calls"]["diagnose.llm"] == 2
+    assert "errors" not in update
+    assert "untrusted output" not in str(diagnostic_model.invoke.call_args)
+
+
+def test_repeated_parser_failure_is_bounded_and_cannot_authorize_repair(diagnostic_model):
+    diagnostic_model.invoke.side_effect = OutputParserException("private raw output")
+    update = diagnostic_agent.diagnose(state(recommended_action="reset_application_state"))
+    assert diagnostic_model.invoke.call_count == 2
+    assert update["recommended_action"] is None
+    assert update["tool_calls"]["diagnose.llm"] == 2
+    assert "after two attempts" in update["errors"][0]
+    assert "private raw output" not in str(update)
 
 
 @pytest.mark.parametrize("budget", [0, 1, 2])
