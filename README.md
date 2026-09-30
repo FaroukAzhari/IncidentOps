@@ -5,9 +5,18 @@ Monitoring, Diagnostic, Recovery, and Verification. It investigates a local
 FastAPI/authentication/SQLite system, applies allowlisted repairs, independently
 tests the result, and retries within explicit limits.
 
-The live Diagnostic Agent uses **`gemini-3.5-flash-lite`** through LangChain
-structured output. Monitoring, Recovery, and Verification execute deterministic
-tools; they do not need extra LLM calls to perform fixed checks or approved actions.
+The live Diagnostic Agent uses Gemini through LangChain structured output; the
+configured default model is **`gemini-3.5-flash-lite`**. Gemini identifies the cause,
+requests additional evidence when needed, and recommends a repair. Recovery
+validates that recommendation and executes the corresponding tool. Monitoring,
+Recovery, and Verification do not make separate LLM calls. This implementation has
+four specialist workflow roles and one role powered directly by an LLM; it should
+not be described as four independently reasoning LLM agents.
+
+The demonstration follows a visible sequence: healthy portal -> manually triggered
+fault -> reported symptoms -> investigation -> repair -> independent verification.
+A report describes symptoms; it never creates a fault. Repairs clear controlled
+application fault flags; they do not restart operating-system processes.
 
 ## Quick start: backend and UI
 
@@ -17,12 +26,26 @@ Use Python **3.12**. From the repository root in PowerShell:
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+python -m pip check
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 python -m uvicorn incidentops.api:app --host 127.0.0.1 --port 8000
 ```
 
 Open **http://127.0.0.1:8000**. The same backend serves the UI; there is no separate
 frontend build. API documentation is at http://127.0.0.1:8000/docs.
+
+Run setup once. If the page already opens, the server is already running; do not
+start another process on port 8000. Opening the page does not call Gemini. The
+selected execution mode determines what happens when you click **Run investigation**.
+
+| Mode | Processes required | Diagnosis |
+| --- | --- | --- |
+| Isolated demo (UI default) | IncidentOps on 8000 | Deterministic rules, no Gemini usage |
+| Local services / Gemini | IncidentOps on 8000, application on 8001, auth on 8002 | Gemini API call |
+| CLI without flags | CLI process only | Observation-only mock; diagnosis skipped |
+
+If PowerShell blocks activation, use `.\.venv\Scripts\python.exe` in place of
+`python` in the commands below. Activation is a convenience, not a requirement.
 
 The default **Isolated demo** runs the actual FastAPI service endpoints, fault
 store, SQLite database, monitoring, recovery, verification, and graph in a temporary
@@ -51,14 +74,25 @@ On macOS/Linux use `python3.12`, `source .venv/bin/activate`, and `.venv/bin/pyt
 
 ## Live Gemini mode and local services
 
-Set `GEMINI_API_KEY` in the ignored `.env` file and leave
-`LLM_MODEL=gemini-3.5-flash-lite`. Then initialize the database:
+Set `GEMINI_API_KEY` in the ignored `.env` file and set `LLM_MODEL` to a Gemini
+model your key can access (the project default is `gemini-3.5-flash-lite`). For the
+IPv4 commands below, set these URLs in `.env` to avoid Windows `localhost`/IPv6
+connection delays:
+
+```dotenv
+INCIDENTOPS_API_URL=http://127.0.0.1:8001
+INCIDENTOPS_AUTH_URL=http://127.0.0.1:8002
+```
+
+Then initialize the database from the repository root:
 
 ```powershell
 python -m environment.database
 ```
 
-Run these in separate activated terminals:
+Run each command in its own terminal from the repository root, using the virtual
+environment. Keep each process running. If port 8000 is already serving the quick
+start UI, start only the two missing services:
 
 ```powershell
 python -m uvicorn environment.auth_service.main:app --host 127.0.0.1 --port 8002
@@ -66,7 +100,11 @@ python -m uvicorn environment.app_service.main:app --host 127.0.0.1 --port 8001
 python -m uvicorn incidentops.api:app --host 127.0.0.1 --port 8000
 ```
 
-In another terminal, inject a supported fault and run the workflow:
+These are three services, not a requirement for three visible terminals; processes
+already running in the background also work. To stop a foreground service, press
+Ctrl+C in its terminal. After a computer restart, start the services again.
+
+For an optional CLI demonstration, use another activated terminal:
 
 ```powershell
 python -m environment.fault_controller inject auth_down
@@ -79,7 +117,9 @@ repairs the configured running services; the demo scenario dropdown is hidden an
 fault is injected by the workflow. Faults can be reset explicitly with
 `python -m environment.fault_controller reset`. All processes must share the same
 `.env`/database paths. Services observe persistent flag changes without restart.
-Restart services after code changes.
+Restart affected services after code or `.env` changes. These commands do not
+enable automatic reload. Restarting IncidentOps clears its in-memory incidents
+and checkpoints; persistent fault flags remain until repaired or cleared.
 
 For the visible fault-to-recovery demo, first select **Local services | Gemini**.
 The Employee Portal makes a fresh fixed-identity sign-in and profile probe, so a
@@ -89,36 +129,39 @@ Write a symptom report and run the investigation. Monitoring and Verification ma
 their own fresh requests; the agents do not receive the selected fault flag as
 evidence. After the run, the portal probes again, while the workflow verdict comes
 from independent Verification. Click **Clear faults** to return the lab to healthy.
-Fault changes are rejected during an investigation to keep its evidence stable.
+UI/API fault changes are rejected during an investigation to keep its evidence
+stable. The separate fault-controller CLI does not share that lock; use it between runs.
 The portal uses the fixed `demo-token` identity; its password display is decorative
 and accepts no personal credentials. Local service probes require ports 8001/8002
 and the initialized database; an unreachable service is shown as a failure, not a
 healthy portal. The incident report describes the problem and never triggers a fault.
 
-Missing keys, invalid structured output, model errors, and unknown observations
-cannot authorize recovery. Errors are recorded and previous actionable diagnosis
-fields are cleared. Live model calls require valid credentials and model access;
+Missing keys or failed diagnosis cannot authorize recovery. Unknown observations
+must not be treated as confirmed healthy or failed services. Invalid Gemini
+structured output is retried once using the same evidence and schema instructions.
+If both attempts fail, actionable diagnosis fields are cleared and an error is
+recorded. Transport/provider retries are disabled; the structured-output retry
+is separate. Live model calls require valid credentials and model access;
 a successful offline evaluation is not proof of those external prerequisites.
 
 ## Architecture and responsibilities
 
 ```mermaid
 flowchart TD
-    Input[Incident / API / CLI] --> M[Monitoring]
+    Start[START] --> M[Monitoring]
     M --> D[Diagnostic]
     D -->|More evidence and budget remains| M
     D -->|Ready, skipped, or evidence exhausted| R[Recovery]
     R --> V[Verification]
-    V -->|All independent checks pass| F[Finalize: resolved]
-    V -->|Failed and retries remain| Retry[Increment retry count once]
+    V -->|Checks pass or stopping condition| F[Finalize]
+    V -->|Failed, diagnosis usable, budgets remain| Retry[Increment retry count once]
     Retry --> D
-    V -->|Failed / diagnosis unavailable / budget exhausted| U[Finalize: unresolved]
     F --> End[END]
-    U --> End
 ```
 
 The legacy simulated observation-only mode follows the four nodes but skips live
 analysis/actions/checks and ends `monitoring_only`, never `resolved`.
+There are six graph nodes: four specialist roles plus `retry` and `finalize`.
 
 | Agent | Owns | Tools / output |
 | --- | --- | --- |
@@ -142,16 +185,20 @@ No agent parses another agent's natural-language explanation to choose a tool.
 
 `incidentops/state.py` defines the Pydantic `IncidentState`. Nodes accept this
 model and return only changed fields. Existing field names are retained.
+The model includes strings, booleans, integers, floats, lists, dictionaries, and
+nested Pydantic results. Optional diagnosis/recovery/verification fields start as
+`None`; confidence is bounded to 0-1, counters are nonnegative, and each collection
+has an independent default factory.
 
 | Fields | Meaning |
 | --- | --- |
 | `incident_id`, `user_report` | Incident identity and request |
 | `service_status`, `profile_check`, `logs`, `metrics` | Latest available observations |
 | `observation_source`, `evidence_source` | Local/simulated provenance; monitoring/verification freshness |
-| `collection_errors` | Current observation errors; separate from accumulated history |
+| `monitoring_complete`, `collection_errors` | Baseline collection attempts finished; current collection errors, if any |
 | `suspected_component`, `suspected_root_cause`, `diagnosis_confidence`, `diagnosis_evidence` | Validated structured diagnosis |
 | `recommended_action`, `needs_more_evidence`, `requested_evidence` | Recovery/evidence contract |
-| `recovery_action`, `recovery_result`, `recovery_attempts` | Actual attempted action and its outcome |
+| `recovery_action`, `recovery_result`, `recovery_attempts`, `max_recovery_attempts` | Actual attempted action, outcome, and action budget |
 | `verification_result`, `verification_passed` | Typed independent check results and verdict |
 | `retry_count`, `max_retries` | Verification-driven retries |
 | `evidence_attempts`, `max_evidence_attempts` | Extra evidence passes, default maximum 2 per incident |
@@ -170,6 +217,20 @@ supported evidence requests. Action/component mismatches and recommendations
 without evidence are invalid. `RecoveryResult` describes an action outcome;
 `VerificationResult` contains five typed `CheckResult` records, a verdict, summary,
 and remaining problems. Unknown, malformed, or failed checks prevent resolution.
+
+The live structured-output call is:
+
+```python
+structured_llm = llm.with_structured_output(Diagnosis, method="json_schema")
+diagnosis = Diagnosis.model_validate(structured_llm.invoke(messages))
+```
+
+See [the schema](incidentops/schemas/diagnosis.py) and
+[Diagnostic implementation](incidentops/agents/diagnostic_agent.py). Fields such as
+`confidence` and `evidence` map to `diagnosis_confidence` and `diagnosis_evidence`
+in shared state. The isolated demo constructs this schema from rules; it does not
+demonstrate LLM structured-output execution. `diagnose.llm` counts attempted model
+calls, including the parsing retry. Exact token usage and cost are not recorded.
 
 ## Retry and terminal semantics
 
@@ -194,6 +255,11 @@ The shared runner sets a LangGraph recursion safety cap above the expected bound
 workflow size. Callers invoking a compiled graph directly with unusually large
 custom budgets should also supply a suitable `recursion_limit`.
 
+Finalization gives passing verification precedence. If diagnosis fails but every
+independent service check passes, the current code can finish `resolved` with the
+diagnosis error still recorded. This means the system was verified healthy; it
+does not mean Gemini successfully diagnosed or repaired it.
+
 ## Supported scenarios
 
 | Scenario | Initial health (API / auth / DB) | Profile | Recovery |
@@ -206,7 +272,10 @@ custom budgets should also supply a suitable `recursion_limit`.
 | `multiple_faults` | true / false / false | 503 initially | Auth, then DB after failed verification |
 | `persistent_auth` | true / false / true | 503 | Deliberately blocked action; bounded unresolved outcome |
 
-The last two are isolated demonstration/evaluation scenarios. Faults are
+The last two are preset isolated demonstration/evaluation scenarios. Local fault
+controls can also activate multiple supported faults by triggering them one after
+another. Deliberately blocked recovery belongs to the isolated `persistent_auth`
+scenario. Faults are
 application-layer simulations: no real process is killed and no database is
 damaged. Recovery clears only its targeted flag. An actual stopped process or
 corrupt database is not repaired by these tools and must not be reported resolved.
@@ -237,6 +306,11 @@ transport errors publish fixed messages or exception types, not raw bodies/keys.
 
 - `GET /` serves the UI; `/static/` serves its local CSS/JavaScript.
 - `GET /api/config` returns scenarios, model name, and key-presence boolean only.
+- `GET /api/lab/portal` probes the fixed demo login and, if it passes, the profile;
+  returns their results and active fault flags. It does not call Gemini.
+- `POST /api/lab/faults` accepts `{"fault":"api_degraded"}` (or another supported
+  fault), enables that flag, and returns a fresh portal probe. Other flags remain set.
+- `POST /api/lab/reset` clears all controlled flags and returns a fresh portal probe.
 - `POST /api/incidents` accepts a validated report, mode, scenario, optional thread
   ID, and optional retry limit. It returns final state plus per-step snapshots and
   measured elapsed times.
@@ -256,6 +330,24 @@ Example body:
 latest 100 completed incidents and deletes checkpoints when evicting one. Existing
 thread IDs return HTTP 409 instead of replaying accumulated state. A new server
 process loses in-memory history; checkpointing is not durable database persistence.
+
+For direct checkpoint inspection, retain the same compiled graph and thread ID:
+
+```python
+from incidentops.graph import build_graph
+from incidentops.state import IncidentState
+
+graph = build_graph()  # Observation-only mock for this memory example.
+config = {"configurable": {"thread_id": "memory-example"}}
+initial = IncidentState(incident_id="memory-example", user_report="Check services")
+graph.invoke(initial.model_dump(), config)
+snapshot = graph.get_state(config)
+print(snapshot.values["final_status"])  # monitoring_only
+print(len(list(graph.get_state_history(config))))
+```
+
+The UI's completed-incident lookup returns retained execution snapshots; it does
+not resume the graph. Separate CLI invocations do not share in-memory checkpoints.
 
 Run **one Uvicorn worker on loopback**. Workflows are serialized because live runs
 share a fault store; a concurrent start receives HTTP 409, while read routes remain
@@ -302,7 +394,7 @@ the run lock; the worker finishes and retains the result for GET lookup.
 The fault-scenario selector is shown only in isolated demo mode, where it creates
 faults in temporary test services. Gemini mode uses the current local environment.
 An incident report describes symptoms; it does not create a fault or override tool
-evidence. To demonstrate a live auth fault, inject it first with
+evidence. To demonstrate a live auth fault, use **Trigger fault** or
 `python -m environment.fault_controller inject auth_down`, then investigate using
 Gemini mode. A healthy environment can correctly finish without a repair.
 
@@ -340,6 +432,37 @@ This explicitly calls Gemini and may incur API charges. It requires the key and
 model access; there is no silent fallback. Live evaluation still uses isolated
 local-service fixtures so it cannot alter a running demonstration environment.
 
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| The page opens without running terminal commands | The services are already running. Choose the mode, then run an investigation. |
+| Port 8000 is already in use | Use the existing server, or stop it before starting a replacement. |
+| Trigger fault displays `Not Found` | The server may still have older Python routes loaded while serving new static files. Restart IncidentOps, then refresh the page. |
+| Portal checks fail or time out | Start the app/auth services, initialize the database, check `.env` URLs and shared paths, and use `127.0.0.1` with the launch commands above. |
+| Recovery is skipped and all checks pass | The environment is healthy. Trigger a fault first if you want to demonstrate a repair. |
+| Diagnosis reports invalid structured output | One automatic schema retry is attempted. If both fail, no repair is authorized. Inspect the error and rerun; persistent failures require investigating the model/schema response. |
+| A key is configured but diagnosis fails | Key presence does not prove model access, quota, or connectivity. Review the model configuration and recorded error. |
+| Old thread ID is not found after restarting | In-memory history was cleared. Start a new investigation. |
+
+## Validation record
+
+README audit on 2026-09-30, using the existing Python 3.12 virtual environment:
+
+- `python -m pytest -q`: **144 passed**.
+- `python -m pip check`: **no broken requirements**.
+- CLI without flags: `monitoring_only`.
+- CLI demos: `auth_down` resolved with 0 retries; `multiple_faults` resolved with
+  1 retry; `persistent_auth` unresolved with 2 retries.
+- `python -m evaluation.evaluate`: **7/7 deterministic integration cases passed**;
+  all six reported correctness rates were 1.0. This does not measure Gemini quality.
+
+The saved [evaluation results](evaluation/results.json) contain the earlier
+2026-09-26 deterministic run. Individual live Gemini smoke tests have also passed
+for healthy, authentication-failure, and API-degraded cases, but no aggregate
+live-model benchmark is claimed. This documentation audit did not make new Gemini
+calls or reinstall dependencies into a fresh environment.
+
 ## Repository map and audit
 
 - `incidentops/agents/`: four specialist nodes.
@@ -352,7 +475,9 @@ local-service fixtures so it cannot alter a running demonstration environment.
 - `environment/`: original services, database, and fault controller.
 - `evaluation/`: ground truth, runner, measured results.
 - `tests/`: regression, integration, API, and evaluation coverage.
-- [AUDIT.md](AUDIT.md): baseline findings and final validation record.
+- [AUDIT.md](AUDIT.md): historical implementation audit; some credential and
+  validation statements describe earlier sessions. Use this README's validation
+  record for the latest documentation audit.
 
 Existing working environment modules were preserved. Changes to earlier agents
 address observed integration gaps rather than stylistic rewrites. The historical
