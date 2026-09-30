@@ -445,6 +445,23 @@ local-service fixtures so it cannot alter a running demonstration environment.
 | A key is configured but diagnosis fails | Key presence does not prove model access, quota, or connectivity. Review the model configuration and recorded error. |
 | Old thread ID is not found after restarting | In-memory history was cleared. Start a new investigation. |
 
+### Check local services before a live demo
+
+Select **Local services | Gemini** and click **Clear faults** in the UI, then run
+these checks in PowerShell. They use the default local ports; adjust the URLs if
+you configured different service addresses.
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:8001/health
+Invoke-RestMethod -Uri http://127.0.0.1:8002/health
+Invoke-RestMethod -Uri http://127.0.0.1:8001/profile -Headers @{ Authorization = 'Bearer demo-token' }
+```
+
+Both health responses should show `healthy: true`. The profile response should
+contain `username: demo` and `role: student`. If a connection fails, check that the
+corresponding service is running before starting an investigation. These checks
+confirm the local environment; they do not validate Gemini credentials or access.
+
 ## Validation record
 
 README audit on 2026-09-30, using the existing Python 3.12 virtual environment:
