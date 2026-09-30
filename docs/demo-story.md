@@ -1,5 +1,8 @@
 # Presenting the IncidentOps story
 
+For a live model run, use the [Gemini authentication demo checklist](demo-checklist.md).
+The walkthroughs below use isolated demo scenarios.
+
 ## Launch
 
 From the repository root:
